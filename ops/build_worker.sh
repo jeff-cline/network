@@ -1,6 +1,7 @@
 #!/bin/bash
-# Build everything sitting in the Q, then publish a vhost for each new site.
-# Runs on a timer so the operator can keep entering details uninterrupted.
+# Build everything in the Q, publish a vhost for each new site, then repoint DNS
+# so the site actually serves at its own domain. Runs on a timer so the operator
+# can keep entering details uninterrupted.
 set -u
 APP=/opt/network-app
 PY=$APP/venv/bin/python
@@ -40,4 +41,8 @@ if [ "$NEW" -gt 0 ]; then
     echo "  !! nginx config test FAILED - not reloading"; nginx -t
   fi
 fi
+
+echo "--- DNS repoint for built sites ---"
+$PY $APP/repoint_built.py
+
 echo "done"
