@@ -15,6 +15,14 @@ DB = "/opt/network-app/network.db"
 INV = "/opt/network-app/data-merged.json"
 KEYS = "/root/.godaddy_keys"
 PROTECTED = {"attorney.plus", "r0cketship.com", "jeff-cline.com", "medigap.plus", "medigap.ai"}
+
+
+def _held(con):
+    """Domains deliberately pointed somewhere else - e.g. restored to their
+    original host. Without this the worker would drag them back every run."""
+    con.execute("""CREATE TABLE IF NOT EXISTS dns_hold(
+        domain TEXT PRIMARY KEY, ip TEXT, reason TEXT, ts REAL)""")
+    return {r[0] for r in con.execute("SELECT domain FROM dns_hold")}
 LIVE = {"LIVE_MULTIPAGE", "LIVE_SINGLE"}
 GODADDY_NS = ("domaincontrol.com",)
 
@@ -47,12 +55,15 @@ def main():
     inv = {r["domain"]: r for r in json.load(open(INV))}
     con = sqlite3.connect(DB); con.row_factory = sqlite3.Row
     rows = con.execute("SELECT domain FROM build_queue WHERE state='built'").fetchall()
+    held = _held(con)
 
     done = skipped = failed = already = 0
     for r in rows:
         d = r["domain"]
         if d in PROTECTED:
             print(f"  BLOCKED (protected): {d}"); skipped += 1; continue
+        if d in held:
+            skipped += 1; continue
         rec = inv.get(d)
         if rec and rec.get("status") in LIVE:
             print(f"  BLOCKED (live site): {d}"); skipped += 1; continue
