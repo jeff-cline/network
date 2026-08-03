@@ -10,6 +10,7 @@ Content is template-driven for now; swap `copy_for()` for a Claude call when an
 Anthropic key is available. Nothing else needs to change.
 """
 import html, json, os, random, re, sqlite3, sys, time
+import urllib.parse, urllib.request
 
 DB = sys.argv[1] if len(sys.argv) > 1 else "/opt/network-app/network.db"
 OUTROOT = sys.argv[2] if len(sys.argv) > 2 else "/var/www/sites"
@@ -59,6 +60,111 @@ def card_svg(seed, pal, alt):
         for i in range(6))
     return (f'<svg class="card-art" viewBox="0 0 340 200" role="img" aria-label="{e(alt)}" '
             f'xmlns="http://www.w3.org/2000/svg"><rect width="340" height="200" fill="{dark}" rx="10"/>{bars}</svg>')
+
+
+
+# ---------- royalty-free photography (Openverse, no API key) ----------
+OV = "https://api.openverse.org/v1/images/"
+UA = {"User-Agent": "r0cketship-network/1.0 (+https://r0cketship.com)"}
+
+
+def _ov_search(q, licenses, n):
+    url = OV + "?" + urllib.parse.urlencode(
+        {"q": q, "license": licenses, "page_size": n, "mature": "false"})
+    try:
+        req = urllib.request.Request(url, headers=UA)
+        with urllib.request.urlopen(req, timeout=20) as r:
+            return json.load(r).get("results", [])
+    except Exception:
+        return []
+
+
+# Words that make an image search too specific to match anything.
+STOPWORDS = {"near", "me", "best", "top", "cheap", "affordable", "local", "cost", "costs",
+             "price", "prices", "pricing", "service", "services", "company", "companies",
+             "guide", "options", "frisco", "texas", "tx", "dallas", "plano", "usa"}
+
+
+def _queries(keyword):
+    """Openverse ANDs every term, so a long phrase matches nothing. Degrade:
+    full phrase -> meaningful words -> head noun."""
+    words = [w for w in re.findall(r"[a-z]+", keyword.lower()) if len(w) > 2]
+    core = [w for w in words if w not in STOPWORDS] or words
+    out = [keyword]
+    if len(core) > 1:
+        out.append(" ".join(core[:2]))
+    if core:
+        out.append(core[0])
+        out.append(core[-1])
+    seen, uniq = set(), []
+    for q in out:
+        if q and q not in seen:
+            seen.add(q); uniq.append(q)
+    return uniq
+
+
+def fetch_images(keyword, outdir, n=4):
+    """Public domain first, attribution-licensed as fallback. Downloads locally so the
+    finished site makes no external requests. Returns [] if nothing usable is found."""
+    # Gather a generous candidate pool: some source URLs 404, redirect, or are
+    # too small to use, so collecting exactly n leaves the site short of images.
+    want = n * 4
+    hits = []
+    for q in _queries(keyword):
+        for lic in ("cc0,pdm", "by"):
+            for h in _ov_search(q, lic, want):
+                if h.get("url") and h["url"] not in {x.get("url") for x in hits}:
+                    hits.append(h)
+        if len(hits) >= want:
+            break
+    os.makedirs(outdir, exist_ok=True)
+    out = []
+    for h in hits:
+        if len(out) >= n:
+            break
+        i = len(out)
+        src = h.get("url")
+        if not src:
+            continue
+        ext = os.path.splitext(urllib.parse.urlparse(src).path)[1].lower()
+        if ext not in (".jpg", ".jpeg", ".png", ".webp"):
+            ext = ".jpg"
+        fn = f"img{i}{ext}"
+        CAP = 2_500_000     # anything larger is too heavy for a landing page
+        try:
+            req = urllib.request.Request(src, headers=UA)
+            with urllib.request.urlopen(req, timeout=25) as r:
+                data = r.read(CAP + 1)
+            # Reading exactly CAP+1 means the file was larger and what we hold is a
+            # truncated, corrupt image. Skip it rather than ship a broken JPEG.
+            if len(data) > CAP or len(data) < 4000:
+                continue
+            if ext in (".jpg", ".jpeg") and not data.rstrip().endswith(b"\xff\xd9"):
+                continue                      # incomplete JPEG (no end-of-image marker)
+            open(os.path.join(outdir, fn), "wb").write(data)
+        except Exception:
+            continue
+        out.append({
+            "file": "img/" + fn,
+            "title": (h.get("title") or keyword)[:90],
+            "creator": (h.get("creator") or "Unknown")[:50],
+            "license": (h.get("license") or "").upper(),
+            "license_url": h.get("license_url") or "",
+            "source": h.get("foreign_landing_url") or src,
+            "public_domain": (h.get("license") or "") in ("cc0", "pdm"),
+        })
+    return out
+
+
+def attribution_html(imgs):
+    need = [i for i in imgs if not i["public_domain"]]
+    if not need:
+        return ""
+    items = " · ".join(
+        f'<a href="{e(i["source"])}" rel="noopener nofollow">{e(i["title"])}</a> by {e(i["creator"])} '
+        f'(<a href="{e(i["license_url"])}" rel="license noopener">CC {e(i["license"])}</a>)'
+        for i in need)
+    return f'<div class="attrib">Photography: {items}</div>'
 
 
 # ---------- copy ----------
@@ -130,6 +236,7 @@ color:var(--tx);font-size:14px;font-weight:600;white-space:nowrap}}
 .login:hover{{border-color:var(--a);color:var(--a)}}
 .hero{{position:relative;overflow:hidden}}
 .hero-art{{width:100%;height:340px;display:block;object-fit:cover}}
+.hero .scrim{{position:absolute;inset:0;background:linear-gradient(90deg,rgba(0,0,0,.78) 0%,rgba(0,0,0,.5) 55%,rgba(0,0,0,.25) 100%)}}
 .hero .txt{{position:absolute;inset:0;display:flex;flex-direction:column;justify-content:center;
 max-width:1120px;margin:0 auto;padding:0 22px}}
 .hero h1{{margin:0 0 10px;font-size:clamp(28px,5vw,46px);line-height:1.1;letter-spacing:-.03em;color:#fff;max-width:15ch}}
@@ -158,6 +265,8 @@ footer h4{{font-size:13px;text-transform:uppercase;letter-spacing:.07em;color:va
 footer a{{display:block;color:var(--tx);text-decoration:none;font-size:14.5px;padding:3px 0}}
 footer a:hover{{color:var(--a)}}
 .legal{{border-top:1px solid var(--line);padding:19px 22px;text-align:center;color:var(--mut);font-size:13px}}
+.attrib{{font-size:11.5px;color:var(--mut);margin-bottom:8px;line-height:1.5}}
+.attrib a{{color:var(--mut);text-decoration:underline}}
 .rocket{{position:fixed;right:19px;bottom:19px;z-index:60;width:52px;height:52px;border-radius:50%;
 background:var(--a);display:flex;align-items:center;justify-content:center;font-size:25px;
 text-decoration:none;box-shadow:0 5px 20px rgba(0,0,0,.28)}}
@@ -190,7 +299,7 @@ def form_html(kind, label, domain):
 </form>"""
 
 
-def footer_html(domain, brand):
+def footer_html(domain, brand, attrib=""):
     forms = [("contact", "Contact Us"), ("investor", "Investor Relations"),
              ("advertise", "Advertise With Us"), ("join", "Join Our Network")]
     links = "".join(f'<a href="/{k}.html">{v}</a>' for k, v in forms)
@@ -202,7 +311,7 @@ def footer_html(domain, brand):
 <a href="https://r0cketship.com">R0cketShip</a>
 <a href="https://jeff-cline.com">Jeff Cline</a></div>
 </div></div>
-<div class="legal">&copy; {time.strftime('%Y')} {e(brand)} · {e(domain)}</div></footer>
+<div class="legal">{attrib}&copy; {time.strftime('%Y')} {e(brand)} · {e(domain)}</div></footer>
 <a class="rocket" href="https://r0cketship.com" aria-label="Powered by R0cketShip" title="R0cketShip">🚀</a>
 <script>
 document.querySelectorAll('form.lead').forEach(f=>f.addEventListener('submit',async ev=>{{
@@ -255,8 +364,10 @@ def build_site(row, outroot):
 
     d = os.path.join(outroot, domain)
     os.makedirs(d, exist_ok=True)
+    imgs = fetch_images(money, os.path.join(d, "img"), n=4)
+    attrib = attribution_html(imgs)
     nav = nav_html(domain, pages, brand)
-    foot = footer_html(domain, brand)
+    foot = footer_html(domain, brand, attrib)
 
     for i, p in enumerate(pages):
         if p["kind"] == "contact":
@@ -274,14 +385,28 @@ def build_site(row, outroot):
             desc = (row["description"] if i == 0 else c["lede"])[:160]
             secs = "".join(f"<section><h2>{e(h)}</h2><p>{e(t)}</p></section>" for h, t in c["sections"])
             kw = p["kw"]
-            cards = "".join(
-                f'<div class="card">'
-                + card_svg(hash(kw + s) % 9999, pal, f"Chart illustrating {s} in relation to {kw}")
-                + f'<div class="body"><h3>{e(titlecase(s))}</h3>'
-                  f'<p>How {e(s)} affects your decision on {e(kw)}.</p></div></div>'
-                for s in supports[:3] if s != kw)
-            art = ('<div class="hero">'
-                   + hero_svg(hash(domain + kw) % 9999, pal, f"Abstract header graphic representing {kw}")
+            others = [x for x in supports[:3] if x != kw]
+            cparts = []
+            for ci, sname in enumerate(others):
+                if imgs:
+                    im = imgs[(ci + 1) % len(imgs)]
+                    media_c = (f'<img class="card-art" src="/{e(im["file"])}" '
+                               f'alt="{e(im["title"])} — related to {e(sname)}" loading="lazy" decoding="async">')
+                else:
+                    media_c = card_svg(hash(kw + sname) % 9999, pal,
+                                       f"Chart illustrating {sname} in relation to {kw}")
+                cparts.append(f'<div class="card">{media_c}<div class="body">'
+                              f'<h3>{e(titlecase(sname))}</h3>'
+                              f'<p>How {e(sname)} affects your decision on {e(kw)}.</p></div></div>')
+            cards = "".join(cparts)
+            hero_img = imgs[i % len(imgs)] if imgs else None
+            if hero_img:
+                media = (f'<img class="hero-art" src="/{e(hero_img["file"])}" '
+                         f'alt="{e(hero_img["title"])} — illustrating {e(kw)}" loading="eager" decoding="async">'
+                         f'<div class="scrim"></div>')
+            else:
+                media = hero_svg(hash(domain + kw) % 9999, pal, f"Abstract header graphic representing {kw}")
+            art = ('<div class="hero">' + media
                    + f'<div class="txt"><h1>{e(c["h1"])}</h1><p>{e(c["lede"])}</p></div></div>')
             body = f'{secs}<div class="grid">{cards}</div>' \
                    f'<section class="cta"><h2>Talk to someone about {e(p["kw"])}</h2>' \

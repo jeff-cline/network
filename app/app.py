@@ -12,6 +12,7 @@ from http import HTTPStatus
 from fastapi import FastAPI, Form, Request, Depends, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from starlette.middleware.sessions import SessionMiddleware
+from fastapi.middleware.cors import CORSMiddleware
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 DB = os.path.join(BASE, "network.db")
@@ -95,6 +96,10 @@ else:
     os.chmod(SECRET_FILE, 0o600)
 
 app = FastAPI(title="Network Back Office")
+# Generated static sites live on their own domains and POST to /api/lead here.
+# Without CORS the browser blocks that cross-origin request and forms fail silently.
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["POST", "OPTIONS"],
+                   allow_headers=["Content-Type"], allow_credentials=False)
 app.add_middleware(SessionMiddleware, secret_key=SECRET, https_only=True, max_age=60 * 60 * 12)
 
 
