@@ -20,3 +20,14 @@ scp site/index.html vultr:/var/www/network/index.html
 ## Notes
 - GoDaddy API auth is `Authorization: Bearer <gd_pat_...>`; tokens live in `~/.godaddy_keys` (never committed)
 - Token rotation deadline: 2027-07-29
+
+## Back office
+`app/app.py` — FastAPI, runs on the server at `/opt/network-app` under systemd
+(`network-app.service`), proxied by nginx at https://network.r0cketship.com.
+
+- Auth: single admin, scrypt-hashed password, forced change on first login
+- Tabs: Live / Parked / Unreachable / Suspended / Broken
+- Selection + select-all persisted in SQLite; live sites cannot be selected
+- `/queue` shows the pending build list — no DNS or generation happens without approval
+
+Deploy: `scp app/app.py vultr:/opt/network-app/app.py && ssh vultr systemctl restart network-app`
