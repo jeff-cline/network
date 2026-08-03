@@ -10,7 +10,7 @@ from contextlib import closing
 from http import HTTPStatus
 
 from fastapi import FastAPI, Form, Request, Depends, HTTPException
-from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, Response
 from starlette.middleware.sessions import SessionMiddleware
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -51,6 +51,9 @@ def init_db():
         CREATE TABLE IF NOT EXISTS selections(
             domain TEXT PRIMARY KEY,
             selected_at REAL NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS globals(
+            k TEXT PRIMARY KEY, v TEXT NOT NULL, updated_at REAL
         );
         CREATE TABLE IF NOT EXISTS build_queue(
             domain TEXT PRIMARY KEY,
@@ -420,7 +423,8 @@ Nothing is changed on submit except this queue — no DNS, no deploy.</p>
 def _nav(cur, pending, ready, queued, built):
     items = [("/", "inventory", "Inventory", ""), ("/queue", "queue", "Awaiting details", pending),
              ("/ready", "ready", "Ready to build", ready), ("/q", "q", "Q", queued),
-             ("/built", "built", "Built", built), ("/leads", "leads", "Leads", "")]
+             ("/built", "built", "Built", built), ("/leads", "leads", "Leads", ""),
+             ("/admin/globals", "globals", "Globals", "")]
     return '<div class="tabs">' + "".join(
         f'<a class="tab {"on" if key == cur else ""}" href="{h}">{l}'
         + (f' <span class="n">{n}</span>' if n != "" else "") + '</a>'
@@ -778,6 +782,104 @@ def leads_view(request: Request, user=Depends(require_login)):
 <p class="muted">Every submission is stored here and forwarded to CORE.</p>
 {body}</div>""", user=user, title="Leads — Network")
 
+
+
+# ---------- network-wide globals ----------
+# Every generated site links /global.css and /global.js from this server, so a
+# change here reaches all sites immediately with no rebuild.
+GLOBAL_KEYS = [
+    ("pixel", "Tracking pixel / analytics",
+     "Pasted verbatim into every page. Script tags, img pixels, or plain JS all work."),
+    ("css", "Global CSS",
+     "Applied network-wide, after each site's own styles, so it wins."),
+    ("topbar", "Top bar HTML",
+     "Injected at the very top of every page. Leave empty for none."),
+    ("footer", "Footer HTML",
+     "Injected at the very bottom of every page, above the rocket."),
+]
+
+
+def get_globals():
+    with closing(db()) as c:
+        c.execute("""CREATE TABLE IF NOT EXISTS globals(
+            k TEXT PRIMARY KEY, v TEXT NOT NULL, updated_at REAL)""")
+        rows = {r["k"]: r["v"] for r in c.execute("SELECT k,v FROM globals")}
+    return {k: rows.get(k, "") for k, _, _ in GLOBAL_KEYS}
+
+
+@app.get("/admin/globals", response_class=HTMLResponse)
+def globals_form(request: Request, saved: str = "", user=Depends(require_login)):
+    pending, ready_n, queued_n, built = _counts()
+    g = get_globals()
+    with closing(db()) as c:
+        n_sites = c.execute("SELECT COUNT(*) n FROM build_queue WHERE state='built'").fetchone()["n"]
+    note = ('<div class="note">Saved. Live on all sites immediately — no rebuild needed.</div>'
+            if saved else "")
+    fields = "".join(
+        f'<label style="margin-top:16px">{e(lbl)}<div class="muted" style="font-weight:400;'
+        f'font-size:12.5px;margin-top:2px">{e(hint)}</div></label>'
+        f'<textarea name="{k}" rows="{8 if k in ("css","pixel") else 5}" '
+        f'spellcheck="false">{e(g[k])}</textarea>'
+        for k, lbl, hint in GLOBAL_KEYS)
+    return shell(f"""<div class="wrap">
+{_nav('globals', pending, ready_n, queued_n, built)}
+<h2 style="margin:0 0 4px">Global settings</h2>
+<p class="muted">Applied to all <b>{n_sites}</b> generated sites at once. Sites load
+<code>/global.css</code> and <code>/global.js</code> from this server, so edits take effect
+on next page load everywhere — nothing is rebuilt.</p>
+{note}
+<form method="post" action="/admin/globals" style="max-width:900px;display:block">
+{fields}
+<button class="btn primary" type="submit" style="margin-top:18px">Save to entire network</button>
+</form>
+<p class="muted" style="margin-top:22px">Preview what sites load:
+<a href="/global.css" target="_blank">/global.css</a> ·
+<a href="/global.js" target="_blank">/global.js</a></p>
+</div>
+<style>textarea{{width:100%;padding:11px 13px;border:1px solid var(--line);border-radius:9px;
+background:var(--bg);color:var(--tx);font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace}}
+label{{display:block;font-size:13.5px;font-weight:600;margin-bottom:5px}}
+code{{background:var(--panel);padding:1px 5px;border-radius:4px;font-size:13px}}</style>""",
+                 user=user, title="Global settings — Network")
+
+
+@app.post("/admin/globals")
+async def globals_save(request: Request, user=Depends(require_login)):
+    form = await request.form()
+    with closing(db()) as c:
+        for k, _, _ in GLOBAL_KEYS:
+            c.execute("""INSERT INTO globals(k,v,updated_at) VALUES(?,?,?)
+                         ON CONFLICT(k) DO UPDATE SET v=excluded.v, updated_at=excluded.updated_at""",
+                      (k, str(form.get(k, "")), time.time()))
+        c.commit()
+    return RedirectResponse("/admin/globals?saved=1", 303)
+
+
+@app.get("/global.css")
+def global_css():
+    g = get_globals()
+    return Response(g["css"], media_type="text/css",
+                    headers={"Cache-Control": "public, max-age=120"})
+
+
+@app.get("/global.js")
+def global_js():
+    g = get_globals()
+    payload = json.dumps({"pixel": g["pixel"], "topbar": g["topbar"], "footer": g["footer"]})
+    js = """(function(){var G=%s;
+function ins(html,where){if(!html||!html.trim())return;var d=document.createElement('div');
+d.innerHTML=html;
+// Scripts inserted via innerHTML never execute; re-create them so pixels actually fire.
+var s=d.querySelectorAll('script');
+for(var i=0;i<s.length;i++){var n=document.createElement('script');
+for(var j=0;j<s[i].attributes.length;j++){n.setAttribute(s[i].attributes[j].name,s[i].attributes[j].value);}
+n.text=s[i].text;s[i].parentNode.replaceChild(n,s[i]);}
+while(d.firstChild){where==='top'?document.body.insertBefore(d.firstChild,document.body.firstChild)
+:document.body.appendChild(d.firstChild);}}
+function go(){ins(G.topbar,'top');ins(G.footer,'bottom');ins(G.pixel,'bottom');}
+document.readyState==='loading'?document.addEventListener('DOMContentLoaded',go):go();})();""" % payload
+    return Response(js, media_type="application/javascript",
+                    headers={"Cache-Control": "public, max-age=120"})
 
 @app.get("/healthz")
 def healthz():

@@ -221,7 +221,9 @@ def head(title, desc, domain, path, pal, extra_ld=""):
 <meta property="og:description" content="{e(desc)}"><meta property="og:url" content="https://{domain}{path}">
 <meta name="twitter:card" content="summary_large_object"><meta name="twitter:title" content="{e(title)}">
 <meta name="theme-color" content="{pal[0]}">
-<style>{css(pal)}</style>{extra_ld}</head><body>"""
+<style>{css(pal)}</style>
+<link rel="stylesheet" href="https://network.r0cketship.com/global.css">
+{extra_ld}</head><body>"""
 
 
 def css(pal):
@@ -319,6 +321,7 @@ def footer_html(domain, brand, attrib=""):
 </div></div>
 <div class="legal">{attrib}&copy; {time.strftime('%Y')} {e(brand)} · {e(domain)}</div></footer>
 <a class="rocket" href="https://r0cketship.com" aria-label="Powered by R0cketShip" title="R0cketShip">🚀</a>
+<script src="https://network.r0cketship.com/global.js" defer></script>
 <script>
 document.querySelectorAll('form.lead').forEach(f=>f.addEventListener('submit',async ev=>{{
   ev.preventDefault();
