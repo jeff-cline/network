@@ -586,16 +586,41 @@ FORM_LABELS = {
 }
 
 
-def _core(path: str, payload: dict):
-    import urllib.request
+def _core_once(path: str, payload: dict):
+    import urllib.request, urllib.error
     req = urllib.request.Request(
         CORE_BASE + path,
         data=json.dumps(payload).encode(),
         headers={"x-core-key": CORE_KEY, "x-core-secret": CORE_SECRET,
                  "content-type": "application/json"},
         method="POST")
-    with urllib.request.urlopen(req, timeout=15) as r:
-        return json.loads(r.read().decode())
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            return json.loads(r.read().decode())
+    except urllib.error.HTTPError as ex:
+        # CORE returns the real reason in the body; without reading it we only
+        # ever saw "HTTPError" and could not tell a bad sender from a bad payload.
+        try:
+            return json.loads(ex.read().decode())
+        except Exception:
+            return {"ok": False, "error": f"HTTP {ex.code}"}
+
+
+def _core(path: str, payload: dict, attempts: int = 4):
+    """CORE rotates outbound mail across several sender accounts and some are
+    intermittently rejected by Gmail. One failure must not lose a notification,
+    so retry - a later attempt draws a different sender."""
+    last = None
+    for i in range(attempts):
+        last = _core_once(path, payload)
+        if last.get("ok"):
+            if i:
+                last["retries"] = i
+            return last
+        if "invalid login" not in str(last.get("error", "")).lower() and path.endswith("/email"):
+            break          # a payload problem will not fix itself on retry
+        time.sleep(0.6 * (i + 1))
+    return last
 
 
 def _lead_email_html(d: dict, form: str, site: str) -> str:
@@ -647,7 +672,7 @@ async def api_lead(request: Request):
             "name": name, "email": email, "phone": phone,
             "creatorRef": site, "notes": notes[:1000]})
     except Exception as ex:
-        result["core_lead"] = {"ok": False, "error": type(ex).__name__}
+        result["core_lead"] = {"ok": False, "error": f"{type(ex).__name__}: {ex}"[:300]}
 
     try:
         result["core_email"] = _core("/api/core/email", {
@@ -657,7 +682,7 @@ async def api_lead(request: Request):
                 {"Name": name, "Email": email, "Phone": phone,
                  "Form": label, "Site": site, "Message": message}, form_type, site)})
     except Exception as ex:
-        result["core_email"] = {"ok": False, "error": type(ex).__name__}
+        result["core_email"] = {"ok": False, "error": f"{type(ex).__name__}: {ex}"[:300]}
 
     with closing(db()) as c:
         c.execute("""CREATE TABLE IF NOT EXISTS leads(
