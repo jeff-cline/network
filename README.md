@@ -42,3 +42,12 @@ Documented: `GET /api/core/ping`, `POST /api/core/lead`.
 Static sites POST to `https://network.r0cketship.com/api/lead` — never directly to CORE,
 because the secret cannot live in client-side HTML. The proxy forwards to CORE, sends the
 notification email with the form name in the subject, and stores a local copy in `leads`.
+
+## Cloudflare
+Token in `~/.cloudflare` (mode 600), scope Zone:DNS:Edit on all zones.
+`ops/cf_repoint.py` repoints zones to the network IP. It only touches a zone that is
+BOTH in build_queue as 'built' AND currently serving nothing — zone membership alone is
+not enough, since several Cloudflare zones are live sites.
+
+Certbot validates www and IPv6 as well as the apex, so repointing must also delete
+AAAA records and set a www A record, or validation fails against Cloudflare's IPv6.
