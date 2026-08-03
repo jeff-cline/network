@@ -25,6 +25,12 @@ PALETTES = [
 ]
 
 
+def clean_kw(s):
+    """Operators type keywords with sentence punctuation. It leaks into titles,
+    slugs and image queries, so normalise it here rather than in six places."""
+    return re.sub(r"\s+", " ", (s or "").strip().strip(".,;:!?-").strip())
+
+
 def slug(s):
     return re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-") or "page"
 
@@ -351,8 +357,8 @@ def build_site(row, outroot):
     if not brand or len(brand) > 42:
         brand = titlecase(re.sub(r"\.[a-z]{2,12}$", "", domain).replace("-", " "))
     pal = PALETTES[hash(domain) % len(PALETTES)]
-    money = row["money_keyword"] or brand
-    supports = [k for k in (row["kw1"], row["kw2"], row["kw3"]) if k]
+    money = clean_kw(row["money_keyword"]) or brand
+    supports = [k for k in (clean_kw(row["kw1"]), clean_kw(row["kw2"]), clean_kw(row["kw3"])) if k]
     while len(supports) < 3:
         supports.append(f"{money} {['guide','costs','options'][len(supports)]}")
 
