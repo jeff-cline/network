@@ -28,10 +28,14 @@ def check(row):
 
     # Query a public resolver, not the server's own. The local cache holds
     # pre-repoint values for the full TTL and produced false failures.
-    _, ip = sh(["dig", "+short", "@1.1.1.1", d, "A"])
-    if not ip.strip():
-        _, ip = sh(["dig", "+short", "@8.8.8.8", d, "A"])
-    ip = ip.strip().split("\n")[0].strip() if ip.strip() else ""
+    ip = ""
+    for resolver in ("@1.1.1.1", "@8.8.8.8", "@9.9.9.9"):
+        rc, out = sh(["dig", "+short", "+time=3", "+tries=1", resolver, d, "A"])
+        cand = [l.strip() for l in out.splitlines()
+                if l.strip() and not l.startswith(";") and re.match(r"^[\d.]+$", l.strip())]
+        if rc == 0 and cand:
+            ip = cand[0]
+            break
     if not ip:
         return d, 0, 0, has_cert, "no DNS record"
     if ip != OUR_IP:
