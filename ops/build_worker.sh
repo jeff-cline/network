@@ -11,6 +11,18 @@ LOG=/var/log/network-build.log
 exec >>"$LOG" 2>&1
 echo "=== $(date -Is) build run ==="
 
+# Promote anything the operator has finished into the Q automatically. The
+# manual gate meant completed entries sat in Ready indefinitely, unbuilt.
+PROMOTED=$($PY - <<'PYEOF'
+import sqlite3
+c = sqlite3.connect("/opt/network-app/network.db")
+n = c.execute("UPDATE build_queue SET state='queued' WHERE state='ready'").rowcount
+c.commit()
+print(n)
+PYEOF
+)
+[ "${PROMOTED:-0}" -gt 0 ] && echo "  promoted $PROMOTED ready -> Q"
+
 $PY $APP/gen_sites.py $APP/network.db $SITES || exit 1
 
 NEW=0
