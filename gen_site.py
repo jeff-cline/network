@@ -17,10 +17,10 @@ e = html.escape
 LABEL = {
     "LIVE_MULTIPAGE": ("Multi-page", "ok"),
     "LIVE_SINGLE": ("Single page", "warn"),
-    "PARKED": ("Parked", "warn"),
-    "EMPTY": ("Empty (200, no content)", "bad"),
-    "ERROR": ("Server error", "bad"),
-    "NO_RESPONSE": ("No response", "bad"),
+    "PARKED": ("Parked \u2014 ready to build", "warn"),
+    "SUSPENDED": ("HOSTING SUSPENDED", "bad"),
+    "BROKEN": ("Server error 5xx", "bad"),
+    "UNREACHABLE": ("No DNS / no host", "bad"),
 }
 
 
@@ -41,6 +41,7 @@ def live_rows():
 <td class="ttl">{title}</td>
 <td class="dsc">{desc}</td>
 <td class="exp muted">{e(r['expires'])}</td>
+<td class="acct muted">{r['account']}</td>
 </tr>""")
     return "\n".join(out)
 
@@ -58,6 +59,7 @@ def build_rows():
 <td class="ttl needs" data-domain="{e(r['domain'])}"><span class="muted">needs title</span></td>
 <td class="dsc needs"><span class="muted">needs description</span></td>
 <td class="exp muted">{e(r['expires'])}</td>
+<td class="acct muted">{r['account']}</td>
 </tr>""")
     return "\n".join(out)
 
@@ -109,14 +111,14 @@ footer a{{color:var(--acc)}}
 </style></head><body>
 <header>
 <h1><span class="r">🚀</span> Network Inventory</h1>
-<p class="lede">{len(results)} active domains · account 1 of 2 · crawled automatically</p>
+<p class="lede">{len(results)} active domains across 2 GoDaddy accounts · crawled automatically</p>
 <div class="stats">
 <div class="stat"><b>{c['LIVE_MULTIPAGE']}</b><span>multi-page</span></div>
 <div class="stat"><b>{c['LIVE_SINGLE']}</b><span>single page</span></div>
-<div class="stat"><b>{c['EMPTY']}</b><span>empty</span></div>
-<div class="stat"><b>{c['ERROR']}</b><span>server error</span></div>
-<div class="stat"><b>{c['NO_RESPONSE']}</b><span>no response</span></div>
-<div class="stat"><b>{c['PARKED']}</b><span>parked</span></div>
+<div class="stat"><b>{c['PARKED']}</b><span>parked · buildable</span></div>
+<div class="stat"><b>{c['SUSPENDED']}</b><span>suspended</span></div>
+<div class="stat"><b>{c['BROKEN']}</b><span>5xx broken</span></div>
+<div class="stat"><b>{c['UNREACHABLE']}</b><span>unreachable</span></div>
 </div>
 </header>
 <div class="tabs" role="tablist">
@@ -128,7 +130,7 @@ footer a{{color:var(--acc)}}
 
 <section class="panel" id="p-live" role="tabpanel" aria-labelledby="t-live">
 <div class="wrap"><table>
-<thead><tr><th></th><th>Domain</th><th>Title</th><th>Description</th><th>Expires</th></tr></thead>
+<thead><tr><th></th><th>Domain</th><th>Title</th><th>Description</th><th>Expires</th><th>Acct</th></tr></thead>
 <tbody>
 {live_rows()}
 </tbody></table></div>
@@ -136,13 +138,13 @@ footer a{{color:var(--acc)}}
 
 <section class="panel" id="p-build" role="tabpanel" aria-labelledby="t-build" hidden>
 <div class="wrap"><table>
-<thead><tr><th></th><th>Domain</th><th>Status</th><th>Detail</th><th>Title</th><th>Description</th><th>Expires</th></tr></thead>
+<thead><tr><th></th><th>Domain</th><th>Status</th><th>Detail</th><th>Title</th><th>Description</th><th>Expires</th><th>Acct</th></tr></thead>
 <tbody>
 {build_rows()}
 </tbody></table></div>
 </section>
 </main>
-<footer>Generated from the GoDaddy API + a live crawl of every domain. Account 2 pending.
+<footer>Generated from the GoDaddy API + a live crawl of all 456 domains across both accounts.
 &nbsp;·&nbsp; <a href="https://r0cketship.com">R0cketShip</a> &nbsp;·&nbsp; <a href="https://jeff-cline.com">Jeff Cline</a></footer>
 <script>
 const tabs=[...document.querySelectorAll('.tab')];
