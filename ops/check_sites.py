@@ -6,7 +6,7 @@ A green light here means the domain resolved to us, returned 200, served its
 own title (not a neighbour's), and carried the lead form and rocket link.
 Anything less is red with the reason, so "live" is never an assumption.
 """
-import json, os, re, sqlite3, subprocess, time
+import html, json, os, re, sqlite3, subprocess, time
 from concurrent.futures import ThreadPoolExecutor
 
 DB = "/opt/network-app/network.db"
@@ -55,8 +55,12 @@ def check(row):
         return d, 0, code, has_cert, f"HTTP {code}"
 
     m = re.search(r"<title>(.*?)</title>", body, re.S)
-    got = (m.group(1) if m else "").strip()
-    if expect_title and got[:40] != expect_title[:40]:
+    # The served title is HTML-escaped; the stored one is not. Comparing them
+    # raw made every title containing "&" look wrong.
+    got = html.unescape((m.group(1) if m else "")).strip()
+    got = re.sub(r"\s+", " ", got)
+    expect_norm = re.sub(r"\s+", " ", html.unescape(expect_title)).strip()
+    if expect_norm and got[:40] != expect_norm[:40]:
         return d, 0, code, has_cert, f"wrong title: {got[:40]!r}"
     if "api/lead" not in body:
         return d, 0, code, has_cert, "lead form missing"
