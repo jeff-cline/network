@@ -320,8 +320,10 @@ def index(request: Request, bucket: str = "parked", q: str = "", user=Depends(re
 <a class="btn primary" href="/queue">Review build queue →</a>
 </div>"""
 
+    _p, _r, _q, _b = _counts()
     return shell(f"""<div class="wrap">
-<div class="tabs">{tabs}</div>
+{_nav('inventory', _p, _r, _q, _b)}
+<div class="tabs" style="margin-top:-6px">{tabs}</div>
 {warn}
 <div class="bar">
 <form method="get"><input type="hidden" name="bucket" value="{cur[0]}">
