@@ -191,7 +191,7 @@ def shell(body: str, user=None, title="Network Back Office") -> str:
 @app.get("/login", response_class=HTMLResponse)
 def login_form(request: Request, err: str = ""):
     if current_user(request):
-        return RedirectResponse("/", 303)
+        return RedirectResponse("/admin", 303)
     e = f'<div class="err">{err}</div>' if err else ""
     return shell(f"""<div class="card"><h2>Sign in</h2>
 <p>Management access for the R0cketShip domain network.</p>{e}
@@ -211,7 +211,7 @@ def login(request: Request, email: str = Form(...), password: str = Form(...)):
     request.session["user"] = u["email"]
     if u["must_change"]:
         return RedirectResponse("/change-password", 303)
-    return RedirectResponse("/", 303)
+    return RedirectResponse("/admin", 303)
 
 
 @app.get("/logout")
@@ -242,7 +242,7 @@ def change_pw(request: Request, p1: str = Form(...), p2: str = Form(...), user=D
     with closing(db()) as c:
         c.execute("UPDATE users SET pw_hash=?,salt=?,must_change=0 WHERE email=?", (hash_pw(p1, salt), salt, user))
         c.commit()
-    return RedirectResponse("/", 303)
+    return RedirectResponse("/admin", 303)
 
 
 def guard_password_change(request: Request, user):
@@ -252,7 +252,7 @@ def guard_password_change(request: Request, user):
 
 
 # ---------- inventory ----------
-@app.get("/", response_class=HTMLResponse)
+@app.get("/admin", response_class=HTMLResponse)
 def index(request: Request, bucket: str = "parked", q: str = "", user=Depends(require_login)):
     if guard_password_change(request, user):
         return RedirectResponse("/change-password", 303)
@@ -272,7 +272,7 @@ def index(request: Request, bucket: str = "parked", q: str = "", user=Depends(re
 
     parts = []
     for k, lbl, _ in BUCKETS:
-        parts.append(f'<a class="tab {"on" if k == cur[0] else ""}" href="/?bucket={k}">'
+        parts.append(f'<a class="tab {"on" if k == cur[0] else ""}" href="/admin?bucket={k}">'
                      f'{lbl} <span class="n">{counts[k]}</span></a>')
         if k == "live":
             # Pending content sits between Live and Parked and jumps straight to
@@ -427,7 +427,7 @@ Nothing is changed on submit except this queue — no DNS, no deploy.</p>
 
 
 def _nav(cur, pending, ready, queued, built):
-    items = [("/", "inventory", "Inventory", ""), ("/queue", "queue", "Awaiting details", pending),
+    items = [("/admin", "inventory", "Inventory", ""), ("/queue", "queue", "Awaiting details", pending),
              ("/ready", "ready", "Ready to build", ready), ("/q", "q", "Q", queued),
              ("/built", "built", "Built", built), ("/leads", "leads", "Leads", ""),
              ("/admin/globals", "globals", "Globals", "")]
@@ -899,6 +899,152 @@ function go(){ins(G.topbar,'top');ins(G.footer,'bottom');ins(G.pixel,'bottom');}
 document.readyState==='loading'?document.addEventListener('DOMContentLoaded',go):go();})();""" % payload
     return Response(js, media_type="application/javascript",
                     headers={"Cache-Control": "public, max-age=120"})
+
+
+# ---------- public landing page ----------
+# Emoji fallback when a domain has no favicon, chosen from the money keyword.
+EMOJI_MAP = [
+    (("roof", "construction", "contractor", "remodel", "repair"), "🏗️"),
+    (("doctor", "medical", "health", "care", "clinic", "physician"), "🩺"),
+    (("insur", "benefit", "coverage", "medigap", "policy"), "🛡️"),
+    (("law", "attorney", "legal", "arbitration"), "⚖️"),
+    (("loan", "mortgage", "finance", "financial", "invest", "capital", "fund"), "💰"),
+    (("real estate", "estate", "land", "house", "home", "apartment", "rent"), "🏠"),
+    (("move", "moving", "van", "truck", "haul", "dumpster"), "🚚"),
+    (("solar", "energy", "carbon", "green"), "☀️"),
+    (("market", "advertis", "seo", "digital", "media", "brand"), "📣"),
+    (("car", "auto", "vehicle", "tire"), "🚗"),
+    (("dental", "teeth", "dentist"), "🦷"),
+    (("pet", "dog", "cat", "vet"), "🐾"),
+    (("food", "restaurant", "coffee", "bacon", "kitchen"), "🍽️"),
+    (("travel", "beach", "tour", "vacation", "resort"), "🌴"),
+    (("tech", "software", "data", "cloud", "ai", "app"), "💻"),
+    (("job", "career", "hire", "recruit", "staff"), "💼"),
+    (("school", "training", "course", "learn", "coach"), "🎓"),
+    (("camera", "photo", "video"), "📷"),
+    (("gun", "arms", "2a", "patriot", "firearm"), "🇺🇸"),
+]
+
+
+def emoji_for(text: str) -> str:
+    t = (text or "").lower()
+    for keys, emo in EMOJI_MAP:
+        if any(k in t for k in keys):
+            return emo
+    return "🌐"
+
+
+@app.get("/", response_class=HTMLResponse)
+def landing():
+    with closing(db()) as c:
+        c.execute("""CREATE TABLE IF NOT EXISTS site_checks(
+            domain TEXT PRIMARY KEY, ok INTEGER, code INTEGER,
+            https INTEGER, detail TEXT, checked_at REAL)""")
+        built = c.execute("SELECT * FROM build_queue WHERE state='built' ORDER BY domain").fetchall()
+        checks = {r["domain"]: r for r in c.execute("SELECT * FROM site_checks")}
+        pending = [r["domain"] for r in
+                   c.execute("SELECT domain FROM selections ORDER BY domain")]
+        queued = c.execute("SELECT domain,title,money_keyword FROM build_queue "
+                           "WHERE state IN ('ready','queued') ORDER BY domain").fetchall()
+
+    live, soon = [], []
+    for r in built:
+        chk = checks.get(r["domain"])
+        (live if (chk and chk["ok"]) else soon).append(r)
+
+    def card(r):
+        d = r["domain"]
+        chk = checks.get(d)
+        scheme = "https" if (chk and chk["https"]) else "http"
+        kw = (r["money_keyword"] or "").strip().strip(".,;:!?-").strip() or d
+        emo = emoji_for(kw + " " + (r["title"] or ""))
+        return f"""<a class="card" href="{scheme}://{e(d)}" target="_blank" rel="noopener">
+<div class="ic"><span class="emo">{emo}</span></div>
+<div class="txt"><h3>{e(kw.title())}</h3>
+<p>{e((r["description"] or "")[:120])}</p>
+<span class="dom">{e(d)} &rarr;</span></div></a>"""
+
+    def soon_card(dom, kw=None, title=None):
+        emo = emoji_for((kw or dom) + " " + (title or ""))
+        label = ((kw or "").strip().strip(".,;:!?-").strip()
+                 or dom.split(".")[0].replace("-", " ")).title()
+        return f"""<div class="card soon">
+<div class="ic"><span class="emo">{emo}</span></div>
+<div class="txt"><h3>{e(label)}</h3>
+<span class="dom">{e(dom)}</span></div></div>"""
+
+    live_html = "".join(card(r) for r in live) or '<p class="muted">No live sites yet.</p>'
+    soon_items = ([soon_card(r["domain"], r["money_keyword"], r["title"]) for r in soon]
+                  + [soon_card(r["domain"], r["money_keyword"], r["title"]) for r in queued]
+                  + [soon_card(d) for d in pending])
+    soon_html = "".join(soon_items)
+
+    return HTMLResponse(f"""<!doctype html><html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The R0cketShip Network — {len(live)} live sites</title>
+<meta name="description" content="A network of {len(live)} live niche websites with
+{len(soon_items)} more in production, powered by R0cketShip.">
+<style>
+:root{{--bg:#0f1115;--panel:#171a21;--line:#262b36;--tx:#e7eaf0;--mut:#8b93a7;--acc:#ff6b1a}}
+@media(prefers-color-scheme:light){{:root{{--bg:#f6f7f9;--panel:#fff;--line:#e4e7ec;--tx:#12151b;--mut:#5b6472}}}}
+*{{box-sizing:border-box}}
+body{{margin:0;background:var(--bg);color:var(--tx);
+font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}}
+.top{{position:sticky;top:0;z-index:10;background:var(--bg);border-bottom:1px solid var(--line)}}
+.top .in{{max-width:1240px;margin:0 auto;padding:14px 24px;display:flex;align-items:center;gap:16px}}
+.logo{{font-size:26px;text-decoration:none;line-height:1}}
+.top h1{{margin:0;font-size:17px;letter-spacing:-.02em;flex:1;font-weight:700}}
+.login{{border:1px solid var(--line);padding:8px 16px;border-radius:9px;text-decoration:none;
+color:var(--tx);font-size:14px;font-weight:600}}
+.login:hover{{border-color:var(--acc);color:var(--acc)}}
+header.hero{{max-width:1240px;margin:0 auto;padding:44px 24px 10px}}
+header.hero h2{{margin:0 0 8px;font-size:clamp(26px,4vw,40px);letter-spacing:-.03em}}
+header.hero p{{margin:0;color:var(--mut);max-width:60ch}}
+main{{max-width:1240px;margin:0 auto;padding:26px 24px 80px}}
+h3.sec{{font-size:13px;text-transform:uppercase;letter-spacing:.09em;color:var(--mut);
+margin:38px 0 14px;border-top:1px solid var(--line);padding-top:26px}}
+.grid{{display:grid;grid-template-columns:repeat(auto-fill,minmax(268px,1fr));gap:14px}}
+.card{{display:flex;gap:13px;background:var(--panel);border:1px solid var(--line);
+border-radius:13px;padding:15px;text-decoration:none;color:inherit;align-items:flex-start}}
+a.card:hover{{border-color:var(--acc);transform:translateY(-1px)}}
+.card.soon{{opacity:.62}}
+.ic{{width:38px;height:38px;border-radius:9px;background:var(--bg);border:1px solid var(--line);
+display:flex;align-items:center;justify-content:center;flex:0 0 38px;overflow:hidden}}
+.emo{{font-size:20px;line-height:1}}
+.txt{{min-width:0;flex:1}}
+.card h3{{margin:0 0 3px;font-size:15.5px;letter-spacing:-.01em}}
+.card p{{margin:0 0 6px;color:var(--mut);font-size:13.5px;
+display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}}
+.dom{{font-size:12.5px;color:var(--acc);font-weight:600;word-break:break-all}}
+.card.soon .dom{{color:var(--mut)}}
+.muted{{color:var(--mut)}}
+footer{{border-top:1px solid var(--line);margin-top:20px}}
+footer .in{{max-width:1240px;margin:0 auto;padding:26px 24px;color:var(--mut);font-size:13.5px;
+display:flex;gap:18px;flex-wrap:wrap}}
+footer a{{color:var(--acc);text-decoration:none}}
+</style></head><body>
+<div class="top"><div class="in">
+<a class="logo" href="https://r0cketship.com" title="R0cketShip">🚀</a>
+<h1>The R0cketShip Network</h1>
+<a class="login" href="/login">Login</a>
+</div></div>
+<header class="hero">
+<h2>{len(live)} live sites. {len(soon_items)} in production.</h2>
+<p>A network of niche websites, each built around a single money keyword.</p>
+</header>
+<main>
+<h3 class="sec">Live now — {len(live)}</h3>
+<div class="grid">{live_html}</div>
+<h3 class="sec">Coming soon — {len(soon_items)}</h3>
+<div class="grid">{soon_html}</div>
+</main>
+<footer><div class="in">
+<a href="https://r0cketship.com">R0cketShip</a>
+<a href="https://jeff-cline.com">Jeff Cline</a>
+<span style="flex:1"></span>
+<span>&copy; {time.strftime('%Y')} · network.r0cketship.com</span>
+</div></footer>
+</body></html>""")
 
 @app.get("/healthz")
 def healthz():
