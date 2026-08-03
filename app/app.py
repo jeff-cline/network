@@ -12,6 +12,10 @@ try:
     from suggest import suggest as _suggest
 except Exception:
     _suggest = None
+try:
+    import acquire as _acq
+except Exception:
+    _acq = None
 from contextlib import closing
 from http import HTTPStatus
 
@@ -430,7 +434,8 @@ def _nav(cur, pending, ready, queued, built):
     items = [("/admin", "inventory", "Inventory", ""), ("/queue", "queue", "Awaiting details", pending),
              ("/ready", "ready", "Ready to build", ready), ("/q", "q", "Q", queued),
              ("/built", "built", "Built", built), ("/leads", "leads", "Leads", ""),
-             ("/admin/globals", "globals", "Globals", "")]
+             ("/admin/globals", "globals", "Globals", ""),
+             ("/admin/acquire", "acquire", "Acquire", "")]
     return '<div class="tabs">' + "".join(
         f'<a class="tab {"on" if key == cur else ""}" href="{h}">{l}'
         + (f' <span class="n">{n}</span>' if n != "" else "") + '</a>'
@@ -1045,6 +1050,151 @@ footer a{{color:var(--acc);text-decoration:none}}
 <span>&copy; {time.strftime('%Y')} · network.r0cketship.com</span>
 </div></footer>
 </body></html>""")
+
+
+# ---------- domain search / buy & build ----------
+NETWORK_IP = os.environ.get("NEW_IP", "207.148.0.22")
+
+
+@app.get("/admin/acquire", response_class=HTMLResponse)
+def acquire_page(request: Request, q: str = "", user=Depends(require_login)):
+    pending, ready_n, queued_n, built = _counts()
+    results = ""
+    if q and _acq:
+        try:
+            r = _acq.search(q)
+        except Exception as ex:
+            r = None
+            results = f'<div class="err">Search failed: {e(type(ex).__name__)}</div>'
+        if r:
+            def row(d, primary=False):
+                dom = d.get("domain", "")
+                avail = d.get("available")
+                price = _acq.money(d.get("price", 0)) if avail else ""
+                renew = _acq.money(d.get("renewalPrice", 0)) if d.get("renewalPrice") else ""
+                if not avail:
+                    return (f'<tr><td class="dom">{e(dom)}</td>'
+                            f'<td><span class="pill bad">taken</span></td>'
+                            f'<td class="muted" colspan="2">already registered</td></tr>')
+                return (f'<tr{" class=hi" if primary else ""}><td class="dom">{e(dom)}</td>'
+                        f'<td><span class="pill ok">available</span></td>'
+                        f'<td><b>{price}</b><div class="muted" style="font-size:12px">'
+                        f'renews {renew}</div></td>'
+                        f'<td><button class="btn primary" onclick="openBuy(\'{e(dom)}\',\'{price}\')">'
+                        f'Buy &amp; Build</button></td></tr>')
+            rows = ""
+            if r.get("exact"):
+                rows += row(r["exact"], primary=True)
+            for a in r.get("alternatives", []):
+                rows += row(a)
+            results = (f'<table><thead><tr><th>Domain</th><th>Status</th><th>Price</th>'
+                       f'<th></th></tr></thead><tbody>{rows}</tbody></table>'
+                       if rows else '<p class="muted">Nothing available for that search.</p>')
+
+    return shell(f"""<div class="wrap">
+{_nav('acquire', pending, ready_n, queued_n, built)}
+<h2 style="margin:0 0 4px">Search &amp; acquire</h2>
+<p class="muted">Find a domain, buy it, and launch a five-page site on
+<code>{NETWORK_IP}</code> in one step. Prices are live from GoDaddy and charged to the
+payment method on your account.</p>
+<form method="get" class="bar">
+<input type="search" name="q" value="{e(q)}" placeholder="dumpster rental frisco — or an exact domain"
+ style="width:420px" autofocus>
+<button class="btn primary" type="submit">Search</button>
+</form>
+{results}
+</div>
+
+<div id="buyModal" class="modal">
+  <div class="sheet">
+    <h3 style="margin:0 0 3px">Buy &amp; Build <span id="bd"></span></h3>
+    <p class="muted" style="margin:0 0 14px">Registering <b id="bp"></b> for one year,
+    pointing DNS at {NETWORK_IP}, and building a five-page site.</p>
+    <form method="post" action="/admin/acquire/buy" id="buyForm">
+      <input type="hidden" name="domain" id="fd">
+      <label>Page title</label><input name="title" id="ft" required maxlength="70">
+      <label>Meta description</label><input name="description" id="fdesc" required maxlength="160">
+      <label>Money keyword</label><input name="money_keyword" id="fk" required>
+      <label>Context <span class="muted">— anything the copy should reflect (optional)</span></label>
+      <textarea name="context" rows="3" placeholder="Audience, location, tone, what makes this one different"></textarea>
+      <div style="display:flex;gap:10px;margin-top:16px">
+        <button class="btn primary" type="submit" style="flex:1">
+          Acquire &amp; launch — <span id="bp2"></span></button>
+        <button class="btn" type="button" onclick="closeBuy()">Cancel</button>
+      </div>
+      <p class="muted" style="font-size:12.5px;margin-top:10px">This charges your GoDaddy
+      account immediately and cannot be undone.</p>
+    </form>
+  </div>
+</div>
+<style>
+.hi td{{background:rgba(255,107,26,.07)}}
+.modal{{display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:100;
+align-items:center;justify-content:center;padding:20px}}
+.modal.on{{display:flex}}
+.sheet{{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:26px;
+max-width:560px;width:100%;max-height:90vh;overflow:auto}}
+.sheet label{{display:block;font-size:13px;color:var(--mut);margin:12px 0 5px;font-weight:600}}
+.sheet input,.sheet textarea{{width:100%;padding:10px 12px;border:1px solid var(--line);
+border-radius:9px;background:var(--bg);color:var(--tx);font:inherit}}
+code{{background:var(--panel);padding:1px 5px;border-radius:4px;font-size:13px}}
+</style>
+<script>
+function slugWords(d){{return d.split('.')[0].replace(/-/g,' ');}}
+function openBuy(dom, price){{
+  document.getElementById('fd').value=dom;
+  document.getElementById('bd').textContent='— '+dom;
+  document.getElementById('bp').textContent=price;
+  document.getElementById('bp2').textContent=price;
+  var w=slugWords(dom);
+  document.getElementById('fk').value=w;
+  document.getElementById('ft').value=w.replace(/(^|\\s)\\S/g,c=>c.toUpperCase());
+  document.getElementById('fdesc').value='Straight answers about '+w+
+    ': what it involves, what it costs, and how to choose.';
+  document.getElementById('buyModal').classList.add('on');
+}}
+function closeBuy(){{document.getElementById('buyModal').classList.remove('on');}}
+document.getElementById('buyModal').addEventListener('click',function(ev){{
+  if(ev.target===this) closeBuy();}});
+</script>""", user=user, title="Search & acquire — Network")
+
+
+@app.post("/admin/acquire/buy")
+async def acquire_buy(request: Request, domain: str = Form(...), title: str = Form(...),
+                      description: str = Form(...), money_keyword: str = Form(...),
+                      context: str = Form(""), user=Depends(require_login)):
+    if not _acq:
+        return RedirectResponse("/admin/acquire?q=" + domain, 303)
+    client_ip = (request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+                 or request.client.host if request.client else "127.0.0.1")
+
+    ok, detail = _acq.purchase(domain, client_ip)
+    if not ok:
+        msg = str(detail.get("message") or detail.get("error") or detail)[:200]
+        with closing(db()) as c:
+            c.execute("""CREATE TABLE IF NOT EXISTS acquisitions(
+                domain TEXT PRIMARY KEY, ts REAL, ok INTEGER, detail TEXT)""")
+            c.execute("INSERT OR REPLACE INTO acquisitions VALUES(?,?,?,?)",
+                      (domain, time.time(), 0, msg))
+            c.commit()
+        return RedirectResponse(f"/admin/acquire?q={domain}&err={msg[:120]}", 303)
+
+    _acq.set_a_record(domain, NETWORK_IP)
+    kws = [k.strip() for k in (context or "").replace(",", "\n").splitlines() if k.strip()][:3]
+    while len(kws) < 3:
+        kws.append("")
+    with closing(db()) as c:
+        c.execute("""CREATE TABLE IF NOT EXISTS acquisitions(
+            domain TEXT PRIMARY KEY, ts REAL, ok INTEGER, detail TEXT)""")
+        c.execute("INSERT OR REPLACE INTO acquisitions VALUES(?,?,?,?)",
+                  (domain, time.time(), 1, json.dumps(detail)[:400]))
+        c.execute("""INSERT OR REPLACE INTO build_queue
+            (domain,title,description,money_keyword,kw1,kw2,kw3,state,queued_at,built_at)
+            VALUES(?,?,?,?,?,?,?, 'queued', ?, NULL)""",
+                  (domain, title.strip(), description.strip(), money_keyword.strip(),
+                   kws[0], kws[1], kws[2], time.time()))
+        c.commit()
+    return RedirectResponse("/q", 303)
 
 @app.get("/healthz")
 def healthz():
