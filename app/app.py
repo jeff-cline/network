@@ -204,7 +204,7 @@ def change_form(request: Request, user=Depends(require_login), err: str = ""):
     return shell(f"""<div class="card"><h2>Set your password</h2>
 <p>The temporary password must be replaced before you can manage the network.</p>{e}
 <form method="post" action="/change-password">
-<label>New password (12+ characters)</label><input type="password" name="p1" required autofocus>
+<label>New password (9+ characters)</label><input type="password" name="p1" required autofocus>
 <label>Confirm</label><input type="password" name="p2" required>
 <button class="btn primary" type="submit">Set password</button>
 </form></div>""", user=user, title="Set password")
@@ -214,8 +214,8 @@ def change_form(request: Request, user=Depends(require_login), err: str = ""):
 def change_pw(request: Request, p1: str = Form(...), p2: str = Form(...), user=Depends(require_login)):
     if p1 != p2:
         return RedirectResponse("/change-password?err=Passwords+do+not+match", 303)
-    if len(p1) < 12:
-        return RedirectResponse("/change-password?err=Use+at+least+12+characters", 303)
+    if len(p1) < 9:
+        return RedirectResponse("/change-password?err=Use+at+least+9+characters", 303)
     salt = secrets.token_hex(16)
     with closing(db()) as c:
         c.execute("UPDATE users SET pw_hash=?,salt=?,must_change=0 WHERE email=?", (hash_pw(p1, salt), salt, user))
