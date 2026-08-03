@@ -346,24 +346,191 @@ async def api_select_bulk(request: Request, user=Depends(require_login)):
     return {"ok": True, "total": n}
 
 
+def _counts():
+    with closing(db()) as c:
+        pending = c.execute("SELECT COUNT(*) n FROM selections").fetchone()["n"]
+        ready = c.execute("SELECT COUNT(*) n FROM build_queue WHERE state='ready'").fetchone()["n"]
+        built = c.execute("SELECT COUNT(*) n FROM build_queue WHERE state='built'").fetchone()["n"]
+    return pending, ready, built
+
+
+def _next_pending(after: str = None):
+    """Next domain still awaiting details, alphabetically after `after`."""
+    with closing(db()) as c:
+        if after:
+            r = c.execute("SELECT domain FROM selections WHERE domain>? ORDER BY domain LIMIT 1", (after,)).fetchone()
+            if r:
+                return r["domain"]
+        r = c.execute("SELECT domain FROM selections ORDER BY domain LIMIT 1").fetchone()
+    return r["domain"] if r else None
+
+
 @app.get("/queue", response_class=HTMLResponse)
 def queue(request: Request, user=Depends(require_login)):
+    pending, ready, built = _counts()
     with closing(db()) as c:
         sel = [r["domain"] for r in c.execute("SELECT domain FROM selections ORDER BY domain")]
     by = {r["domain"]: r for r in INVENTORY}
+    LBL = {"PARKED": "Parked", "SUSPENDED": "Suspended", "UNREACHABLE": "No host", "BROKEN": "5xx"}
     rows = "".join(
-        f'<tr><td class="dom">{d}</td><td><span class="pill warn">{by[d]["status"]}</span></td>'
-        f'<td class="muted">{by[d]["expires"]}</td><td class="muted">acct {by[d]["account"]}</td></tr>'
+        f'<tr><td class="dom"><a href="/intake/{d}">{d}</a></td>'
+        f'<td><span class="pill warn">{LBL.get(by[d]["status"], by[d]["status"])}</span></td>'
+        f'<td class="muted">{by[d]["expires"]}</td><td class="muted">acct {by[d]["account"]}</td>'
+        f'<td><a class="btn" href="/intake/{d}">Add details →</a></td></tr>'
         for d in sel if d in by)
-    body = (f'<p class="muted">{len(sel)} domains selected. Nothing has been changed yet — '
-            f'DNS repointing and site generation require explicit approval of this exact list.</p>'
-            f'<table><thead><tr><th>Domain</th><th>Current status</th><th>Expires</th><th>Account</th></tr></thead>'
-            f'<tbody>{rows}</tbody></table>') if sel else '<p class="muted">Nothing selected yet.</p>'
+
+    start = (f'<a class="btn primary" href="/intake/{sel[0]}">Start filling in details →</a>' if sel else "")
+    body = (f'<table><thead><tr><th>Domain</th><th>Status</th><th>Expires</th><th>Account</th><th></th></tr></thead>'
+            f'<tbody>{rows}</tbody></table>') if sel else \
+           '<p class="muted">Nothing awaiting details. Everything selected has been filled in.</p>'
+
     return shell(f"""<div class="wrap">
-<div class="bar"><a class="btn" href="/">← Back to inventory</a></div>
-<h2 style="margin:0 0 4px">Build queue</h2>
+{_nav('queue', pending, ready, built)}
+<h2 style="margin:0 0 4px">Awaiting details</h2>
+<p class="muted">{pending} domains need a title, description and keyword before they can be built.
+Nothing is changed on submit except this queue — no DNS, no deploy.</p>
+<div class="bar">{start}</div>
 {body}
-</div>""", user=user, title="Build queue — Network")
+</div>""", user=user, title="Awaiting details — Network")
+
+
+def _nav(cur, pending, ready, built):
+    items = [("/", "Inventory", ""), ("/queue", "Awaiting details", pending),
+             ("/ready", "Ready to build", ready), ("/built", "Built", built)]
+    return '<div class="tabs">' + "".join(
+        f'<a class="tab {"on" if (h == "/queue" and cur == "queue") or (h == "/ready" and cur == "ready") or (h == "/built" and cur == "built") else ""}" href="{h}">{l}'
+        + (f' <span class="n">{n}</span>' if n != "" else "") + '</a>'
+        for h, l, n in items) + "</div>"
+
+
+@app.get("/intake/{domain}", response_class=HTMLResponse)
+def intake_form(domain: str, request: Request, err: str = "", user=Depends(require_login)):
+    rec = next((r for r in INVENTORY if r["domain"] == domain), None)
+    if not rec:
+        raise HTTPException(404, "unknown domain")
+    pending, ready, built = _counts()
+
+    with closing(db()) as c:
+        existing = c.execute("SELECT * FROM build_queue WHERE domain=?", (domain,)).fetchone()
+        still_pending = c.execute("SELECT 1 FROM selections WHERE domain=?", (domain,)).fetchone()
+        pos = c.execute("SELECT COUNT(*) n FROM selections WHERE domain<=?", (domain,)).fetchone()["n"]
+
+    v = (lambda k: (existing[k] or "") if existing else "")
+    e = f'<div class="err">{err}</div>' if err else ""
+    done = built + ready
+    progress = (f'<span class="muted">{pos} of {pending} remaining · {done} completed</span>'
+                if still_pending else '<span class="muted">Editing an already-completed entry</span>')
+
+    return shell(f"""<div class="wrap">
+{_nav('queue', pending, ready, built)}
+<div class="bar"><a class="btn" href="/queue">← Queue</a>{progress}</div>
+<div class="card" style="max-width:760px;margin:8px auto">
+<h2 style="font-size:22px">{domain}</h2>
+<p><a href="http://{domain}" target="_blank" rel="noopener">http://{domain}</a>
+&nbsp;·&nbsp; <span class="pill warn">{rec['status']}</span>
+&nbsp;·&nbsp; <span class="muted">expires {rec['expires']} · account {rec['account']}</span></p>
+{e}
+<form method="post" action="/intake/{domain}">
+<label>Page title <span class="muted">— shows in search results and the browser tab</span></label>
+<input name="title" value="{v('title')}" required autofocus maxlength="70" placeholder="e.g. Bathroom Remodeling in Frisco, TX">
+
+<label>Meta description <span class="muted">— the snippet under the title in search results</span></label>
+<input name="description" value="{v('description')}" required maxlength="160" placeholder="One or two sentences, under 160 characters">
+
+<label>Money keyword <span class="muted">— the main term this site should rank for</span></label>
+<input name="money_keyword" value="{v('money_keyword')}" required placeholder="e.g. bathroom remodeling frisco">
+
+<label>Supporting keyword 1 <span class="muted">— optional, becomes a supporting page</span></label>
+<input name="kw1" value="{v('kw1')}" placeholder="optional">
+<label>Supporting keyword 2 <span class="muted">— optional</span></label>
+<input name="kw2" value="{v('kw2')}" placeholder="optional">
+<label>Supporting keyword 3 <span class="muted">— optional</span></label>
+<input name="kw3" value="{v('kw3')}" placeholder="optional">
+
+<button class="btn primary" type="submit">Save &amp; next →</button>
+</form>
+<form method="post" action="/intake/{domain}/skip" style="margin-top:10px">
+<button class="btn" type="submit" style="width:100%">Skip for now</button>
+</form>
+</div></div>""", user=user, title=f"{domain} — details")
+
+
+@app.post("/intake/{domain}")
+def intake_save(domain: str, request: Request,
+                title: str = Form(...), description: str = Form(...),
+                money_keyword: str = Form(...), kw1: str = Form(""), kw2: str = Form(""),
+                kw3: str = Form(""), user=Depends(require_login)):
+    if not next((r for r in INVENTORY if r["domain"] == domain), None):
+        raise HTTPException(404, "unknown domain")
+    title, description = title.strip(), description.strip()
+    if len(title) < 8:
+        return RedirectResponse(f"/intake/{domain}?err=Title+is+too+short", 303)
+    if len(description) < 20:
+        return RedirectResponse(f"/intake/{domain}?err=Description+should+be+at+least+20+characters", 303)
+    if not money_keyword.strip():
+        return RedirectResponse(f"/intake/{domain}?err=Money+keyword+is+required", 303)
+
+    nxt = _next_pending(after=domain)
+    with closing(db()) as c:
+        c.execute("""INSERT INTO build_queue(domain,title,description,money_keyword,kw1,kw2,kw3,state,queued_at)
+                     VALUES(?,?,?,?,?,?,?, 'ready', ?)
+                     ON CONFLICT(domain) DO UPDATE SET
+                       title=excluded.title, description=excluded.description,
+                       money_keyword=excluded.money_keyword, kw1=excluded.kw1,
+                       kw2=excluded.kw2, kw3=excluded.kw3, state='ready'""",
+                  (domain, title, description, money_keyword.strip(),
+                   kw1.strip(), kw2.strip(), kw3.strip(), time.time()))
+        c.execute("DELETE FROM selections WHERE domain=?", (domain,))
+        c.commit()
+    return RedirectResponse(f"/intake/{nxt}" if nxt else "/ready", 303)
+
+
+@app.post("/intake/{domain}/skip")
+def intake_skip(domain: str, user=Depends(require_login)):
+    nxt = _next_pending(after=domain)
+    return RedirectResponse(f"/intake/{nxt}" if nxt else "/queue", 303)
+
+
+@app.get("/ready", response_class=HTMLResponse)
+def ready(request: Request, user=Depends(require_login)):
+    pending, ready_n, built = _counts()
+    with closing(db()) as c:
+        rows = c.execute("SELECT * FROM build_queue WHERE state='ready' ORDER BY domain").fetchall()
+    tr = "".join(
+        f'<tr><td class="dom">{r["domain"]}</td><td>{r["title"]}</td>'
+        f'<td class="dsc">{r["description"]}</td>'
+        f'<td><b>{r["money_keyword"]}</b><div class="muted">'
+        + ", ".join(x for x in (r["kw1"], r["kw2"], r["kw3"]) if x) + "</div></td>"
+        f'<td><a class="btn" href="/intake/{r["domain"]}">Edit</a></td></tr>' for r in rows)
+    body = (f'<table><thead><tr><th>Domain</th><th>Title</th><th>Description</th>'
+            f'<th>Keywords</th><th></th></tr></thead><tbody>{tr}</tbody></table>') if rows else \
+           '<p class="muted">Nothing ready yet. Fill in details from the queue.</p>'
+    return shell(f"""<div class="wrap">
+{_nav('ready', pending, ready_n, built)}
+<h2 style="margin:0 0 4px">Ready to build</h2>
+<p class="muted">{ready_n} domains have complete details. Generation and DNS repointing
+still require explicit approval — nothing here has been deployed.</p>
+{body}
+</div>""", user=user, title="Ready to build — Network")
+
+
+@app.get("/built", response_class=HTMLResponse)
+def built_view(request: Request, user=Depends(require_login)):
+    pending, ready_n, built = _counts()
+    with closing(db()) as c:
+        rows = c.execute("SELECT * FROM build_queue WHERE state='built' ORDER BY built_at DESC").fetchall()
+    tr = "".join(
+        f'<tr><td class="dom"><a href="https://{r["domain"]}" target="_blank" rel="noopener">{r["domain"]}</a></td>'
+        f'<td>{r["title"]}</td><td class="muted">{time.strftime("%Y-%m-%d %H:%M", time.localtime(r["built_at"])) if r["built_at"] else ""}</td></tr>'
+        for r in rows)
+    body = (f'<table><thead><tr><th>Domain</th><th>Title</th><th>Built</th></tr></thead>'
+            f'<tbody>{tr}</tbody></table>') if rows else \
+           '<p class="muted">No sites built yet.</p>'
+    return shell(f"""<div class="wrap">
+{_nav('built', pending, ready_n, built)}
+<h2 style="margin:0 0 4px">Built</h2>
+{body}
+</div>""", user=user, title="Built — Network")
 
 
 @app.get("/healthz")
