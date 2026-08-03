@@ -57,4 +57,7 @@ fi
 echo "--- DNS repoint for built sites ---"
 $PY $APP/repoint_built.py
 
+echo "--- health check ---"
+$PY $APP/check_sites.py
+
 echo "done"

@@ -5,7 +5,7 @@ network.r0cketship.com — management back office.
 Auth (single admin), bucket tabs over the domain inventory, selection state,
 and a build queue. Site generation is a separate stage that reads the queue.
 """
-import hashlib, hmac, json, os, secrets, sqlite3, time
+import hashlib, hmac, html, json, os, secrets, sqlite3, time
 from contextlib import closing
 from http import HTTPStatus
 
@@ -18,6 +18,8 @@ BASE = os.path.dirname(os.path.abspath(__file__))
 DB = os.path.join(BASE, "network.db")
 DATA = os.path.join(BASE, "data-merged.json")
 SECRET_FILE = os.path.join(BASE, ".session_secret")
+
+e = html.escape
 
 BUCKETS = [
     ("live",        "Live Sites",   ["LIVE_MULTIPAGE", "LIVE_SINGLE"]),
@@ -155,6 +157,12 @@ tr:last-child td{border-bottom:0}
 .card .btn{width:100%;margin-top:18px;text-align:center}
 .err{background:rgba(207,72,77,.12);border:1px solid var(--bad);color:var(--bad);padding:9px 12px;border-radius:9px;font-size:13.5px;margin-bottom:8px}
 .note{background:rgba(255,107,26,.1);border:1px solid var(--acc);padding:10px 13px;border-radius:9px;font-size:13.5px;margin-bottom:14px}
+.lamp{display:inline-block;width:10px;height:10px;border-radius:50%;vertical-align:middle;margin-right:5px}
+.lamp.green{background:var(--ok);box-shadow:0 0 0 3px rgba(46,160,67,.18)}
+.lamp.red{background:var(--bad);box-shadow:0 0 0 3px rgba(207,72,77,.18)}
+.lamp.grey{background:var(--mut);opacity:.5}
+.bad{color:var(--bad)}
+.stat{white-space:nowrap}
 .selbar{position:sticky;bottom:0;background:var(--panel);border:1px solid var(--acc);border-radius:12px;padding:12px 16px;display:flex;gap:12px;align-items:center;margin-top:14px}
 </style>
 """
@@ -241,6 +249,8 @@ def index(request: Request, bucket: str = "parked", q: str = "", user=Depends(re
         return RedirectResponse("/change-password", 303)
 
     counts = {k: sum(1 for r in INVENTORY if r["status"] in st) for k, _, st in BUCKETS}
+    with closing(db()) as _c:
+        pending_n = _c.execute("SELECT COUNT(*) n FROM selections").fetchone()["n"]
     cur = next((b for b in BUCKETS if b[0] == bucket), BUCKETS[1])
     rows = [r for r in INVENTORY if r["status"] in cur[2]]
     if q:
@@ -251,9 +261,16 @@ def index(request: Request, bucket: str = "parked", q: str = "", user=Depends(re
     with closing(db()) as c:
         sel = {r["domain"] for r in c.execute("SELECT domain FROM selections")}
 
-    tabs = "".join(
-        f'<a class="tab {"on" if k == cur[0] else ""}" href="/?bucket={k}">{lbl} <span class="n">{counts[k]}</span></a>'
-        for k, lbl, _ in BUCKETS)
+    parts = []
+    for k, lbl, _ in BUCKETS:
+        parts.append(f'<a class="tab {"on" if k == cur[0] else ""}" href="/?bucket={k}">'
+                     f'{lbl} <span class="n">{counts[k]}</span></a>')
+        if k == "live":
+            # Pending content sits between Live and Parked and jumps straight to
+            # the editing queue - it is a destination, not an inventory filter.
+            parts.append(f'<a class="tab" href="/queue">Pending content '
+                         f'<span class="n">{pending_n}</span></a>')
+    tabs = "".join(parts)
 
     LBL = {"LIVE_MULTIPAGE": ("Multi-page", "ok"), "LIVE_SINGLE": ("Single page", "warn"),
            "PARKED": ("Parked", "warn"), "SUSPENDED": ("Suspended", "bad"),
@@ -557,19 +574,62 @@ sites. Keep editing in <a href="/queue">Awaiting details</a> — the two do not 
 def built_view(request: Request, user=Depends(require_login)):
     pending, ready_n, queued_n, built = _counts()
     with closing(db()) as c:
+        c.execute("""CREATE TABLE IF NOT EXISTS site_checks(
+            domain TEXT PRIMARY KEY, ok INTEGER, code INTEGER,
+            https INTEGER, detail TEXT, checked_at REAL)""")
         rows = c.execute("SELECT * FROM build_queue WHERE state='built' ORDER BY built_at DESC").fetchall()
-    tr = "".join(
-        f'<tr><td class="dom"><a href="https://{r["domain"]}" target="_blank" rel="noopener">{r["domain"]}</a></td>'
-        f'<td>{r["title"]}</td><td class="muted">{time.strftime("%Y-%m-%d %H:%M", time.localtime(r["built_at"])) if r["built_at"] else ""}</td></tr>'
-        for r in rows)
-    body = (f'<table><thead><tr><th>Domain</th><th>Title</th><th>Built</th></tr></thead>'
-            f'<tbody>{tr}</tbody></table>') if rows else \
+        checks = {r["domain"]: r for r in c.execute("SELECT * FROM site_checks")}
+
+    tr = []
+    green = red = untested = 0
+    for r in rows:
+        chk = checks.get(r["domain"])
+        if not chk:
+            light = '<span class="lamp grey" title="not tested yet"></span> <span class="muted">not tested</span>'
+            untested += 1
+        elif chk["ok"]:
+            light = (f'<span class="lamp green" title="{e(chk["detail"])}"></span> '
+                     f'live &amp; tested <span class="muted">· {e(chk["detail"])}</span>')
+            green += 1
+        else:
+            light = (f'<span class="lamp red" title="{e(chk["detail"])}"></span> '
+                     f'<span class="bad">{e(chk["detail"])}</span>')
+            red += 1
+        when = (time.strftime("%m/%d %H:%M", time.localtime(chk["checked_at"]))
+                if chk and chk["checked_at"] else "")
+        scheme = "https" if (chk and chk["https"]) else "http"
+        tr.append(
+            f'<tr><td class="dom"><a href="{scheme}://{r["domain"]}" target="_blank" rel="noopener">{r["domain"]}</a></td>'
+            f'<td>{e(r["title"] or "")}</td>'
+            f'<td class="stat">{light}<div class="muted" style="font-size:12px">{when}</div></td>'
+            f'<td class="muted">{time.strftime("%m/%d %H:%M", time.localtime(r["built_at"])) if r["built_at"] else ""}</td>'
+            f'<td><a class="btn" href="/intake/{r["domain"]}">Edit</a></td></tr>')
+
+    summary = (f'<div class="bar"><span class="lamp green"></span> {green} live &amp; tested '
+               f'&nbsp; <span class="lamp red"></span> {red} error '
+               f'&nbsp; <span class="lamp grey"></span> {untested} not tested '
+               f'<span style="flex:1"></span>'
+               f'<form method="post" action="/built/recheck"><button class="btn" type="submit">Re-test all</button></form></div>')
+
+    body = (f'<table><thead><tr><th>Domain</th><th>Title</th><th>Live &amp; tested</th>'
+            f'<th>Built</th><th></th></tr></thead><tbody>{"".join(tr)}</tbody></table>') if rows else \
            '<p class="muted">No sites built yet.</p>'
     return shell(f"""<div class="wrap">
 {_nav('built', pending, ready_n, queued_n, built)}
 <h2 style="margin:0 0 4px">Built</h2>
+<p class="muted">A green light means the domain resolves here, returns 200, serves its own
+title, and carries the lead form and rocket link — tested, not assumed.</p>
+{summary}
 {body}
 </div>""", user=user, title="Built — Network")
+
+
+@app.post("/built/recheck")
+def built_recheck(user=Depends(require_login)):
+    import subprocess
+    subprocess.Popen(["/opt/network-app/venv/bin/python", "/opt/network-app/check_sites.py"],
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return RedirectResponse("/built", 303)
 
 
 # ---------- lead capture (public, called by generated static sites) ----------
