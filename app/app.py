@@ -350,8 +350,9 @@ def _counts():
     with closing(db()) as c:
         pending = c.execute("SELECT COUNT(*) n FROM selections").fetchone()["n"]
         ready = c.execute("SELECT COUNT(*) n FROM build_queue WHERE state='ready'").fetchone()["n"]
+        queued = c.execute("SELECT COUNT(*) n FROM build_queue WHERE state='queued'").fetchone()["n"]
         built = c.execute("SELECT COUNT(*) n FROM build_queue WHERE state='built'").fetchone()["n"]
-    return pending, ready, built
+    return pending, ready, queued, built
 
 
 def _next_pending(after: str = None):
@@ -367,7 +368,7 @@ def _next_pending(after: str = None):
 
 @app.get("/queue", response_class=HTMLResponse)
 def queue(request: Request, user=Depends(require_login)):
-    pending, ready, built = _counts()
+    pending, ready_n, queued_n, built = _counts()
     with closing(db()) as c:
         sel = [r["domain"] for r in c.execute("SELECT domain FROM selections ORDER BY domain")]
     by = {r["domain"]: r for r in INVENTORY}
@@ -385,7 +386,7 @@ def queue(request: Request, user=Depends(require_login)):
            '<p class="muted">Nothing awaiting details. Everything selected has been filled in.</p>'
 
     return shell(f"""<div class="wrap">
-{_nav('queue', pending, ready, built)}
+{_nav('queue', pending, ready_n, queued_n, built)}
 <h2 style="margin:0 0 4px">Awaiting details</h2>
 <p class="muted">{pending} domains need a title, description and keyword before they can be built.
 Nothing is changed on submit except this queue — no DNS, no deploy.</p>
@@ -394,13 +395,14 @@ Nothing is changed on submit except this queue — no DNS, no deploy.</p>
 </div>""", user=user, title="Awaiting details — Network")
 
 
-def _nav(cur, pending, ready, built):
-    items = [("/", "Inventory", ""), ("/queue", "Awaiting details", pending),
-             ("/ready", "Ready to build", ready), ("/built", "Built", built)]
+def _nav(cur, pending, ready, queued, built):
+    items = [("/", "inventory", "Inventory", ""), ("/queue", "queue", "Awaiting details", pending),
+             ("/ready", "ready", "Ready to build", ready), ("/q", "q", "Q", queued),
+             ("/built", "built", "Built", built), ("/leads", "leads", "Leads", "")]
     return '<div class="tabs">' + "".join(
-        f'<a class="tab {"on" if (h == "/queue" and cur == "queue") or (h == "/ready" and cur == "ready") or (h == "/built" and cur == "built") else ""}" href="{h}">{l}'
+        f'<a class="tab {"on" if key == cur else ""}" href="{h}">{l}'
         + (f' <span class="n">{n}</span>' if n != "" else "") + '</a>'
-        for h, l, n in items) + "</div>"
+        for h, key, l, n in items) + "</div>"
 
 
 @app.get("/intake/{domain}", response_class=HTMLResponse)
@@ -408,7 +410,7 @@ def intake_form(domain: str, request: Request, err: str = "", user=Depends(requi
     rec = next((r for r in INVENTORY if r["domain"] == domain), None)
     if not rec:
         raise HTTPException(404, "unknown domain")
-    pending, ready, built = _counts()
+    pending, ready_n, queued_n, built = _counts()
 
     with closing(db()) as c:
         existing = c.execute("SELECT * FROM build_queue WHERE domain=?", (domain,)).fetchone()
@@ -417,12 +419,12 @@ def intake_form(domain: str, request: Request, err: str = "", user=Depends(requi
 
     v = (lambda k: (existing[k] or "") if existing else "")
     e = f'<div class="err">{err}</div>' if err else ""
-    done = built + ready
+    done = built + ready_n + queued_n
     progress = (f'<span class="muted">{pos} of {pending} remaining · {done} completed</span>'
                 if still_pending else '<span class="muted">Editing an already-completed entry</span>')
 
     return shell(f"""<div class="wrap">
-{_nav('queue', pending, ready, built)}
+{_nav('queue', pending, ready_n, queued_n, built)}
 <div class="bar"><a class="btn" href="/queue">← Queue</a>{progress}</div>
 <div class="card" style="max-width:760px;margin:8px auto">
 <h2 style="font-size:22px">{domain}</h2>
@@ -493,7 +495,7 @@ def intake_skip(domain: str, user=Depends(require_login)):
 
 @app.get("/ready", response_class=HTMLResponse)
 def ready(request: Request, user=Depends(require_login)):
-    pending, ready_n, built = _counts()
+    pending, ready_n, queued_n, built = _counts()
     with closing(db()) as c:
         rows = c.execute("SELECT * FROM build_queue WHERE state='ready' ORDER BY domain").fetchall()
     tr = "".join(
@@ -505,18 +507,50 @@ def ready(request: Request, user=Depends(require_login)):
     body = (f'<table><thead><tr><th>Domain</th><th>Title</th><th>Description</th>'
             f'<th>Keywords</th><th></th></tr></thead><tbody>{tr}</tbody></table>') if rows else \
            '<p class="muted">Nothing ready yet. Fill in details from the queue.</p>'
+    send = (f'<form method="post" action="/ready/send"><button class="btn primary" type="submit">'
+            f'Send all {ready_n} to Q &rarr;</button></form>') if ready_n else ""
     return shell(f"""<div class="wrap">
-{_nav('ready', pending, ready_n, built)}
+{_nav('ready', pending, ready_n, queued_n, built)}
 <h2 style="margin:0 0 4px">Ready to build</h2>
-<p class="muted">{ready_n} domains have complete details. Generation and DNS repointing
-still require explicit approval — nothing here has been deployed.</p>
+<p class="muted">{ready_n} domains have complete details. Send them to <b>Q</b> when you want
+them picked up for generation — you can keep editing while the Q is processed.</p>
+<div class="bar">{send}</div>
 {body}
 </div>""", user=user, title="Ready to build — Network")
 
 
+@app.post("/ready/send")
+def ready_send(user=Depends(require_login)):
+    with closing(db()) as c:
+        c.execute("UPDATE build_queue SET state='queued' WHERE state='ready'")
+        c.commit()
+    return RedirectResponse("/q", 303)
+
+
+@app.get("/q", response_class=HTMLResponse)
+def q_view(request: Request, user=Depends(require_login)):
+    pending, ready_n, queued_n, built = _counts()
+    with closing(db()) as c:
+        rows = c.execute("SELECT * FROM build_queue WHERE state='queued' ORDER BY domain").fetchall()
+    tr = "".join(
+        f'<tr><td class="dom">{r["domain"]}</td><td>{r["title"]}</td>'
+        f'<td><b>{r["money_keyword"]}</b></td>'
+        f'<td><span class="pill warn">queued</span></td>'
+        f'<td><a class="btn" href="/intake/{r["domain"]}">Edit</a></td></tr>' for r in rows)
+    body = (f'<table><thead><tr><th>Domain</th><th>Title</th><th>Money keyword</th>'
+            f'<th>State</th><th></th></tr></thead><tbody>{tr}</tbody></table>') if rows else            '<p class="muted">Q is empty. Send domains here from <a href="/ready">Ready to build</a>.</p>'
+    return shell(f"""<div class="wrap">
+{_nav('q', pending, ready_n, queued_n, built)}
+<h2 style="margin:0 0 4px">Q — picked up for generation</h2>
+<p class="muted">{queued_n} domains queued. These are being processed into five-page static
+sites. Keep editing in <a href="/queue">Awaiting details</a> — the two do not block each other.</p>
+{body}
+</div>""", user=user, title="Q — Network")
+
+
 @app.get("/built", response_class=HTMLResponse)
 def built_view(request: Request, user=Depends(require_login)):
-    pending, ready_n, built = _counts()
+    pending, ready_n, queued_n, built = _counts()
     with closing(db()) as c:
         rows = c.execute("SELECT * FROM build_queue WHERE state='built' ORDER BY built_at DESC").fetchall()
     tr = "".join(
@@ -527,15 +561,137 @@ def built_view(request: Request, user=Depends(require_login)):
             f'<tbody>{tr}</tbody></table>') if rows else \
            '<p class="muted">No sites built yet.</p>'
     return shell(f"""<div class="wrap">
-{_nav('built', pending, ready_n, built)}
+{_nav('built', pending, ready_n, queued_n, built)}
 <h2 style="margin:0 0 4px">Built</h2>
 {body}
 </div>""", user=user, title="Built — Network")
 
 
+# ---------- lead capture (public, called by generated static sites) ----------
+CORE_BASE = "https://medigap.plus"
+CORE_KEY = os.environ.get("CORE_KEY", "")
+CORE_SECRET = os.environ.get("CORE_SECRET", "")
+NOTIFY_TO = os.environ.get("NOTIFY_TO", "jeff.cline@me.com")
+
+FORM_LABELS = {
+    "contact": "Contact Us",
+    "investor": "Investor Relations",
+    "advertise": "Advertise With Us",
+    "join": "Join Our Network",
+}
+
+
+def _core(path: str, payload: dict):
+    import urllib.request
+    req = urllib.request.Request(
+        CORE_BASE + path,
+        data=json.dumps(payload).encode(),
+        headers={"x-core-key": CORE_KEY, "x-core-secret": CORE_SECRET,
+                 "content-type": "application/json"},
+        method="POST")
+    with urllib.request.urlopen(req, timeout=15) as r:
+        return json.loads(r.read().decode())
+
+
+def _lead_email_html(d: dict, form: str, site: str) -> str:
+    rows = "".join(
+        f'<tr><td style="padding:9px 14px;border-bottom:1px solid #e6e8ec;color:#697084;'
+        f'font:13px -apple-system,sans-serif;white-space:nowrap">{k}</td>'
+        f'<td style="padding:9px 14px;border-bottom:1px solid #e6e8ec;'
+        f'font:14px -apple-system,sans-serif;color:#12151b">{v}</td></tr>'
+        for k, v in d.items() if v)
+    return f"""<div style="background:#f6f7f9;padding:28px">
+<table style="max-width:620px;margin:0 auto;background:#fff;border:1px solid #e2e5ea;
+border-radius:12px;border-collapse:collapse;width:100%">
+<tr><td style="padding:20px 22px;border-bottom:1px solid #e2e5ea">
+<div style="font:700 18px -apple-system,sans-serif;color:#12151b">🚀 {FORM_LABELS.get(form, form)}</div>
+<div style="font:13px -apple-system,sans-serif;color:#697084;margin-top:3px">
+New submission from <b>{site}</b></div></td></tr>
+<tr><td style="padding:6px 8px"><table style="width:100%;border-collapse:collapse">{rows}</table></td></tr>
+<tr><td style="padding:14px 22px;border-top:1px solid #e2e5ea;
+font:12px -apple-system,sans-serif;color:#8b93a7">
+Sent by the R0cketShip network · <a href="https://r0cketship.com" style="color:#ff6b1a">r0cketship.com</a>
+</td></tr></table></div>"""
+
+
+@app.post("/api/lead")
+async def api_lead(request: Request):
+    """Public endpoint. Static sites POST here; the CORE secret never leaves the server."""
+    try:
+        b = await request.json()
+    except Exception:
+        form = await request.form()
+        b = dict(form)
+
+    name = (b.get("name") or "").strip()
+    email = (b.get("email") or "").strip()
+    phone = (b.get("phone") or "").strip()
+    form_type = (b.get("form") or "contact").strip().lower()
+    site = (b.get("site") or request.headers.get("referer") or "unknown").strip()
+    message = (b.get("message") or "").strip()
+
+    if not (name and email and phone):
+        return JSONResponse({"ok": False, "error": "name, email and phone are required"}, 400)
+
+    label = FORM_LABELS.get(form_type, form_type.title())
+    notes = f"[{label}] from {site}" + (f" — {message}" if message else "")
+
+    result = {"core_lead": None, "core_email": None}
+    try:
+        result["core_lead"] = _core("/api/core/lead", {
+            "name": name, "email": email, "phone": phone,
+            "creatorRef": site, "notes": notes[:1000]})
+    except Exception as ex:
+        result["core_lead"] = {"ok": False, "error": type(ex).__name__}
+
+    try:
+        result["core_email"] = _core("/api/core/email", {
+            "to": NOTIFY_TO,
+            "subject": f"{label} — {site}",
+            "html": _lead_email_html(
+                {"Name": name, "Email": email, "Phone": phone,
+                 "Form": label, "Site": site, "Message": message}, form_type, site)})
+    except Exception as ex:
+        result["core_email"] = {"ok": False, "error": type(ex).__name__}
+
+    with closing(db()) as c:
+        c.execute("""CREATE TABLE IF NOT EXISTS leads(
+            id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, site TEXT, form TEXT,
+            name TEXT, email TEXT, phone TEXT, message TEXT, core_result TEXT)""")
+        c.execute("INSERT INTO leads(ts,site,form,name,email,phone,message,core_result) VALUES(?,?,?,?,?,?,?,?)",
+                  (time.time(), site, form_type, name, email, phone, message, json.dumps(result)))
+        c.commit()
+
+    ok = bool((result["core_lead"] or {}).get("ok"))
+    return JSONResponse({"ok": True, "delivered": ok})
+
+
+@app.get("/leads", response_class=HTMLResponse)
+def leads_view(request: Request, user=Depends(require_login)):
+    pending, ready_n, queued_n, built = _counts()
+    with closing(db()) as c:
+        c.execute("""CREATE TABLE IF NOT EXISTS leads(
+            id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, site TEXT, form TEXT,
+            name TEXT, email TEXT, phone TEXT, message TEXT, core_result TEXT)""")
+        rows = c.execute("SELECT * FROM leads ORDER BY ts DESC LIMIT 300").fetchall()
+    tr = "".join(
+        f'<tr><td class="muted">{time.strftime("%m/%d %H:%M", time.localtime(r["ts"]))}</td>'
+        f'<td class="dom">{r["site"]}</td><td>{FORM_LABELS.get(r["form"], r["form"])}</td>'
+        f'<td>{r["name"]}</td><td>{r["email"]}</td><td>{r["phone"]}</td>'
+        f'<td class="dsc">{(r["message"] or "")[:60]}</td></tr>' for r in rows)
+    body = (f'<table><thead><tr><th>When</th><th>Site</th><th>Form</th><th>Name</th>'
+            f'<th>Email</th><th>Phone</th><th>Message</th></tr></thead><tbody>{tr}</tbody></table>'
+            ) if rows else '<p class="muted">No leads yet.</p>'
+    return shell(f"""<div class="wrap">
+{_nav('leads', pending, ready_n, queued_n, built)}
+<h2 style="margin:0 0 4px">Leads</h2>
+<p class="muted">Every submission is stored here and forwarded to CORE.</p>
+{body}</div>""", user=user, title="Leads — Network")
+
+
 @app.get("/healthz")
 def healthz():
-    return {"ok": True, "domains": len(INVENTORY)}
+    return {"ok": True, "domains": len(INVENTORY), "core": bool(CORE_KEY and CORE_SECRET)}
 
 
 init_db()
