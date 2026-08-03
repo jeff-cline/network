@@ -5,7 +5,13 @@ network.r0cketship.com — management back office.
 Auth (single admin), bucket tabs over the domain inventory, selection state,
 and a build queue. Site generation is a separate stage that reads the queue.
 """
-import hashlib, hmac, html, json, os, secrets, sqlite3, time
+import hashlib, hmac, html, json, os, secrets, sqlite3, sys, time
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+try:
+    from suggest import suggest as _suggest
+except Exception:
+    _suggest = None
 from contextlib import closing
 from http import HTTPStatus
 
@@ -443,11 +449,23 @@ def intake_form(domain: str, request: Request, err: str = "", user=Depends(requi
         still_pending = c.execute("SELECT 1 FROM selections WHERE domain=?", (domain,)).fetchone()
         pos = c.execute("SELECT COUNT(*) n FROM selections WHERE domain<=?", (domain,)).fetchone()["n"]
 
-    v = (lambda k: (existing[k] or "") if existing else "")
+    # Pre-populate from the domain itself - these are money-word URLs, so the
+    # phrase is in the name. Only used when nothing has been saved yet.
+    sug = {}
+    if not existing and _suggest:
+        try:
+            sug = _suggest(domain)
+        except Exception:
+            sug = {}
+    v = (lambda k: (existing[k] or "") if existing else sug.get(k, ""))
+    prefilled = bool(sug) and not existing
     e = f'<div class="err">{err}</div>' if err else ""
     done = built + ready_n + queued_n
     progress = (f'<span class="muted">{pos} of {pending} remaining · {done} completed</span>'
                 if still_pending else '<span class="muted">Editing an already-completed entry</span>')
+    pre_note = ('<div class="note">Pre-filled from the domain name — check it reads right, '
+                'then <b>Save &amp; next</b>. Brand names and misspellings will need editing.</div>'
+                if prefilled else "")
 
     return shell(f"""<div class="wrap">
 {_nav('queue', pending, ready_n, queued_n, built)}
@@ -458,6 +476,7 @@ def intake_form(domain: str, request: Request, err: str = "", user=Depends(requi
 &nbsp;·&nbsp; <span class="pill warn">{rec['status']}</span>
 &nbsp;·&nbsp; <span class="muted">expires {rec['expires']} · account {rec['account']}</span></p>
 {e}
+{pre_note}
 <form method="post" action="/intake/{domain}">
 <label>Page title <span class="muted">— shows in search results and the browser tab</span></label>
 <input name="title" value="{v('title')}" required autofocus maxlength="70" placeholder="e.g. Bathroom Remodeling in Frisco, TX">
