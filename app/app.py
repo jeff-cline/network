@@ -908,6 +908,38 @@ document.readyState==='loading'?document.addEventListener('DOMContentLoaded',go)
                     headers={"Cache-Control": "public, max-age=120"})
 
 
+
+# Flagship properties, shown first on the public landing page. These are real
+# WordPress sites on their own hosting - never build targets.
+BRANDS = [
+    ("r0cketship.com",                  "R0cketShip",              "White-label predictive data networks by niche."),
+    ("1-800-medigap.com",               "1-800-MEDIGAP",           "Medicare guidance by phone, from licensed agents."),
+    ("medigap.ai",                      "Medigap.AI",              "AI-assisted Medicare plan comparison."),
+    ("vrtcls.com",                      "VRTCLS",                  "Multi-family office and vertical investment strategy."),
+    ("rentablemansions.com",            "Rent A Mansion",          "Event venues and corporate retreats."),
+    ("offtakers.org",                   "Offtakers",               "Offtake agreement network for providers and buyers."),
+    ("keywordcalls.com",                "Keyword Calls",           "Inbound calls that convert 33x better than clicks."),
+    ("openenergycorp.com",              "Open Energy",             "Energy news and market intelligence."),
+    ("newcozumel.com",                  "New Cozumel",             "Cozumel real estate, listed and sold."),
+    ("ventureintro.com",                "Venture Intro",           "Start, scale and sell your venture."),
+    ("2a.healthcare",                   "2A Healthcare",           "Individual and family health coverage."),
+    ("accidentsicknesspay.com",         "Accident Sickness Pay",   "Income protection when you cannot work."),
+    ("commercialsteelfabrication.com",  "Commercial Steel",        "Structural steel fabrication and erection."),
+    ("healthitservices.com",            "Health IT Services",      "Moving healthcare forward through technology."),
+    ("lushmud.com",                     "Lush Mud",                "Mineral skincare, made simple."),
+    ("transdermalimmunotherapy.com",    "Transdermal Immunotherapy","Allergy medicine without the needles."),
+    ("alergies.com",                    "Allergy Testing",         "Find allergy testing near you."),
+    ("carboncredits.mx",                "Carbon Credits",          "Private marketplace to buy and sell credits."),
+    ("jumbo.loans",                     "Jumbo Loans",             "New construction jumbo mortgages."),
+    ("1-800-havevan.com",               "1-800-HAVEVAN",           "Nationwide moving, one number."),
+    ("770-roofers.com",                 "770 Roofers",             "Find a roofer near you in Georgia."),
+    ("concreteboompumptruck.com",       "Concrete Boom Pump",      "Boom pump trucks, booked by the day."),
+    ("plantsbaseddiet.com",             "Plants Based Diet",       "Plants for health, without the dogma."),
+    ("eternalwallofansweredprayer.com", "Eternal Wall",            "A million answered prayers, one wall."),
+    ("fiercecities.com",                "Fierce Cities",           "Boom America trusted partner portal."),
+    ("2a.ag",                           "2A Clickless",            "Phone number optimisation for advertisers."),
+]
+
 # ---------- public landing page ----------
 # Emoji fallback when a domain has no favicon, chosen from the money keyword.
 EMOJI_MAP = [
@@ -980,6 +1012,32 @@ def landing():
 <div class="txt"><h3>{e(label)}</h3>
 <span class="dom">{e(dom)}</span></div></div>"""
 
+    # tint.json records each logo's measured brightness; a white mark on a white
+    # tile is invisible, so light logos get a dark tile and vice versa.
+    try:
+        tint = json.load(open("/var/www/network/brandicons/tint.json"))
+    except Exception:
+        tint = {}
+
+    def brand_card(dom, name, blurb):
+        emo = emoji_for(name + " " + blurb)
+        t = tint.get(dom)
+        if t and t.get("file"):
+            cls = "bic dark" if t.get("light") else "bic"
+            ic = (f'<img src="/brandicons/{e(t["file"])}" alt="{e(name)} logo" loading="lazy"'
+                  f' onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'flex\'">'
+                  f'<span class="bemo">{emo}</span>')
+        else:
+            cls = "bic"
+            ic = f'<span class="bemo" style="display:flex">{emo}</span>'
+        return f"""<a class="bcard" href="https://{e(dom)}" target="_blank" rel="noopener">
+<div class="{cls}">{ic}</div>
+<div class="btxt"><h3>{e(name)}</h3><p>{e(blurb)}</p>
+<span class="dom">{e(dom)} &rarr;</span></div></a>"""
+
+    brands_html = "".join(brand_card(d, n, b) for d, n, b in BRANDS)
+    brand_doms = {d for d, _, _ in BRANDS}
+    live = [r for r in live if r["domain"] not in brand_doms]
     live_html = "".join(card(r) for r in live) or '<p class="muted">No live sites yet.</p>'
     soon_items = ([soon_card(r["domain"], r["money_keyword"], r["title"]) for r in soon]
                   + [soon_card(r["domain"], r["money_keyword"], r["title"]) for r in queued]
@@ -1011,6 +1069,21 @@ main{{max-width:1240px;margin:0 auto;padding:26px 24px 80px}}
 h3.sec{{font-size:13px;text-transform:uppercase;letter-spacing:.09em;color:var(--mut);
 margin:38px 0 14px;border-top:1px solid var(--line);padding-top:26px}}
 .grid{{display:grid;grid-template-columns:repeat(auto-fill,minmax(268px,1fr));gap:14px}}
+.bgrid{{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}}
+@media(max-width:900px){{.bgrid{{grid-template-columns:repeat(2,1fr)}}}}
+@media(max-width:600px){{.bgrid{{grid-template-columns:1fr}}}}
+.bcard{{display:flex;gap:15px;background:var(--panel);border:1px solid var(--line);
+border-radius:15px;padding:20px;text-decoration:none;color:inherit;align-items:flex-start;
+transition:border-color .15s,transform .15s}}
+.bcard:hover{{border-color:var(--acc);transform:translateY(-2px)}}
+.bic{{width:50px;height:50px;border-radius:12px;background:var(--bg);border:1px solid var(--line);
+display:flex;align-items:center;justify-content:center;flex:0 0 50px;overflow:hidden}}
+.bic.dark{{background:#12151b;border-color:#2a2f3a}}
+.bic img{{width:32px;height:32px;border-radius:6px;object-fit:contain}}
+.bemo{{display:none;font-size:26px;line-height:1;align-items:center;justify-content:center;width:100%;height:100%}}
+.btxt{{min-width:0;flex:1}}
+.bcard h3{{margin:0 0 4px;font-size:17px;letter-spacing:-.015em}}
+.bcard p{{margin:0 0 8px;color:var(--mut);font-size:14px;line-height:1.5}}
 .card{{display:flex;gap:13px;background:var(--panel);border:1px solid var(--line);
 border-radius:13px;padding:15px;text-decoration:none;color:inherit;align-items:flex-start}}
 a.card:hover{{border-color:var(--acc);transform:translateY(-1px)}}
@@ -1036,11 +1109,13 @@ footer a{{color:var(--acc);text-decoration:none}}
 <a class="login" href="/login">Login</a>
 </div></div>
 <header class="hero">
-<h2>{len(live)} live sites. {len(soon_items)} in production.</h2>
+<h2>{len(BRANDS)} brands. {len(live)} network sites. {len(soon_items)} in production.</h2>
 <p>A network of niche websites, each built around a single money keyword.</p>
 </header>
 <main>
-<h3 class="sec">Live now — {len(live)}</h3>
+<h3 class="sec">Brands</h3>
+<div class="bgrid">{brands_html}</div>
+<h3 class="sec">Network sites — {len(live)}</h3>
 <div class="grid">{live_html}</div>
 <h3 class="sec">Coming soon — {len(soon_items)}</h3>
 <div class="grid">{soon_html}</div>
