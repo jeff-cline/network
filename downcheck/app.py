@@ -33,8 +33,13 @@ PRICE = "9"
 
 # ---------- storage ----------
 def db():
-    c = sqlite3.connect(DB, timeout=15)
+    # WAL lets the checker daemon write while the web app reads and writes.
+    # Without it a busy checker locks the database and form posts 500.
+    c = sqlite3.connect(DB, timeout=30)
     c.row_factory = sqlite3.Row
+    c.execute("PRAGMA journal_mode=WAL")
+    c.execute("PRAGMA busy_timeout=30000")
+    c.execute("PRAGMA synchronous=NORMAL")
     return c
 
 
@@ -207,6 +212,7 @@ def shell(body, acct=None, title="Website Down Checkers", owner=False, cur=""):
         items = [("/app", "app", "Dashboard")]
         if owner:
             items.append(("/admin", "admin", "Customers"))
+            items.append(("/admin/requests", "requests", "Enquiries"))
         nav = "".join(f'<a class="{"on" if k == cur else ""}" href="{h}">{l}</a>'
                       for h, k, l in items)
         right = f'<span class="who">{e(acct)}</span> <a class="btn ghost btn-sm" href="/logout">Sign out</a>'
@@ -604,6 +610,20 @@ def plans_page(request: Request, err: str = "", ok: str = "", aid=Depends(requir
         p = PLANS[k]
         is_cur = (k == cur)
         per_day = 86400 // p["interval"]
+        if p.get("request"):
+            feats = "".join(f"<li>{e(x)}</li>" for x in p["features"])
+            cta = ('<div class="curbadge">Your current plan</div>' if is_cur else
+                   '<a class="btn" style="width:100%;text-align:center;box-sizing:border-box" '
+                   'href="/corporate">Request pricing</a>')
+            cards += f"""<div class="plan corp {'cur' if is_cur else ''}">
+<div class="pname">{e(p['name'])}</div>
+<div class="pamt req">Let&rsquo;s talk</div>
+<div class="pfreq">{e(p['human'])}</div>
+<p>{e(p['blurb'])}</p>
+<ul>{feats}</ul>
+<div class="pfor">{e(p['for'])}</div>
+{cta}</div>"""
+            continue
         cards += f"""<div class="plan {'cur' if is_cur else ''}">
 <div class="pname">{e(p['name'])}</div>
 <div class="pamt">${p['price']:,}<span>/mo</span></div>
@@ -645,6 +665,8 @@ padding:18px 20px;margin-bottom:22px;max-width:560px}}
 .plan{{background:var(--panel);border:1px solid var(--line);border-radius:15px;padding:24px;
 display:flex;flex-direction:column}}
 .plan.cur{{border-color:var(--acc)}}
+.plan.corp{{border-color:var(--acc);background:linear-gradient(180deg,rgba(255,90,31,.06),transparent)}}
+.pamt.req{{font-size:30px}}
 .pname{{font-size:13px;text-transform:uppercase;letter-spacing:.07em;color:var(--mut);font-weight:700}}
 .pamt{{font-size:42px;font-weight:800;letter-spacing:-.03em;margin:6px 0 2px}}
 .pamt span{{font-size:15px;color:var(--mut);font-weight:600}}
@@ -685,6 +707,163 @@ def plans_coupon(request: Request, code: str = Form(...), aid=Depends(require)):
     p = PLANS[c_["plan"]]
     return RedirectResponse(
         f"/plans?ok=Coupon+applied.+You+are+on+{p['name']}+—+checks+{p['human'].replace(' ', '+')}.", 303)
+
+
+# ---------- corporate enquiry ----------
+@app.get("/corporate", response_class=HTMLResponse)
+def corporate_form(request: Request, err: str = "", sent: str = ""):
+    a = None
+    aid = current(request)
+    if aid:
+        a = _acct(aid)
+    if sent:
+        return HTMLResponse(shell("""<div class="card wide" style="text-align:center">
+<div style="font-size:44px;line-height:1;margin-bottom:10px">✅</div>
+<h1>Thank you — that is on its way</h1>
+<p class="mut">We have your details and will come back with pricing shortly.
+Nothing is charged and nothing changes on your account in the meantime.</p>
+<a class="btn" href="/app">Back to dashboard</a></div>""",
+            acct=a["email"] if a else None, title="Request received"))
+    ee = f'<div class="err">{e(err)}</div>' if err else ""
+    pre_e = e(a["email"]) if a else ""
+    pre_c = e(a["company"] or "") if a else ""
+    return HTMLResponse(shell(f"""<div class="wrap">
+<div class="corpwrap">
+<div class="corpside">
+<div class="pname" style="color:var(--acc)">Corporate</div>
+<h1 style="font-size:29px;margin:6px 0 12px">Monitoring built for portfolios</h1>
+<p class="mut" style="font-size:15.5px">When you run dozens of sites, they usually run on a
+handful of servers. One machine stops and every site on it goes dark at once.</p>
+<p class="mut" style="font-size:15.5px">Ordinary monitoring sends you one email per site.
+We group your sites by the server they sit on, check the server first, and confirm with a
+second hostname before blaming it. One outage, one email.</p>
+<ul class="corpfeat">
+<li>Sites grouped automatically by server</li>
+<li>Two hostnames must fail before a server is blamed</li>
+<li>One alert per server outage — not one per site</li>
+<li>Silence the sites you already know need fixing</li>
+<li>Unlimited sites, servers and recipients</li>
+</ul>
+<p class="mut" style="font-size:13.5px;border-top:1px solid var(--line);padding-top:14px">
+Priced on portfolio size. Tell us the shape of yours and we will come back with a number.</p>
+</div>
+<div class="corpform">
+<h2 style="margin:0 0 4px;font-size:19px">Request pricing</h2>
+<p class="mut" style="font-size:14px">No obligation. We reply personally.</p>
+{ee}
+<form method="post" action="/corporate">
+<label>Your name</label><input name="name" required autocomplete="name">
+<label>Company</label><input name="company" value="{pre_c}" autocomplete="organization">
+<label>Email</label><input type="email" name="email" value="{pre_e}" required autocomplete="email">
+<label>Phone <span class="mut">(optional)</span></label><input name="phone" autocomplete="tel">
+<div class="two">
+<div><label>Roughly how many sites?</label><input name="sites" placeholder="e.g. 200" required></div>
+<div><label>How many servers?</label><input name="servers" placeholder="e.g. 6"></div>
+</div>
+<label>Anything we should know? <span class="mut">(optional)</span></label>
+<textarea name="notes" rows="3" placeholder="Hosting providers, what has gone wrong before, who needs alerting"></textarea>
+<button class="btn" type="submit" style="width:100%;margin-top:18px">Request pricing</button>
+</form>
+</div></div></div>
+<style>
+.corpwrap{{display:grid;grid-template-columns:1.05fr .95fr;gap:34px;align-items:start;
+max-width:1000px;margin:10px auto}}
+@media(max-width:860px){{.corpwrap{{grid-template-columns:1fr}}}}
+.corpside{{padding-top:6px}}
+.pname{{font-size:12.5px;text-transform:uppercase;letter-spacing:.08em;font-weight:800}}
+.corpfeat{{list-style:none;padding:0;margin:18px 0}}
+.corpfeat li{{padding:7px 0 7px 25px;position:relative;color:var(--mut);font-size:14.5px}}
+.corpfeat li:before{{content:"✓";position:absolute;left:0;color:var(--ok);font-weight:800}}
+.corpform{{background:var(--panel);border:1px solid var(--acc);border-radius:16px;padding:26px}}
+.corpform textarea{{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:9px;
+background:var(--bg);color:var(--tx);font:inherit;resize:vertical}}
+.two{{display:grid;grid-template-columns:1fr 1fr;gap:12px}}
+@media(max-width:520px){{.two{{grid-template-columns:1fr}}}}
+</style>""", acct=a["email"] if a else None,
+             owner=bool(a["is_owner"]) if a else False, title="Corporate pricing"))
+
+
+@app.post("/corporate")
+async def corporate_submit(request: Request, name: str = Form(""), email: str = Form(""),
+                           sites: str = Form(""), company: str = Form(""),
+                           phone: str = Form(""), servers: str = Form(""),
+                           notes: str = Form("")):
+    # Every field is optional at the signature so a blank one is validated here and
+    # answered with a readable message, rather than FastAPI returning a raw 422.
+    name, email, sites = name.strip(), email.strip().lower(), sites.strip()
+    if not name:
+        return RedirectResponse("/corporate?err=Please+tell+us+your+name", 303)
+    if "@" not in email or "." not in email.split("@")[-1]:
+        return RedirectResponse("/corporate?err=Please+give+a+valid+email+address", 303)
+    if not sites:
+        return RedirectResponse("/corporate?err=Roughly+how+many+sites+do+you+run%3F", 303)
+    with closing(db()) as c:
+        c.execute("""CREATE TABLE IF NOT EXISTS corp_requests(
+            id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, name TEXT, company TEXT,
+            email TEXT, phone TEXT, sites TEXT, servers TEXT, notes TEXT)""")
+        c.execute("""INSERT INTO corp_requests(ts,name,company,email,phone,sites,servers,notes)
+                     VALUES(?,?,?,?,?,?,?,?)""",
+                  (time.time(), name, company.strip(), email, phone.strip(),
+                   sites, servers.strip(), notes.strip()))
+        c.commit()
+
+    def row(k, v):
+        return (f'<tr><td style="padding:7px 16px 7px 0;color:#697084;white-space:nowrap;'
+                f'font-size:13px">{e(k)}</td>'
+                f'<td style="padding:7px 0;font-size:14.5px"><b>{e(v) or "—"}</b></td></tr>')
+
+    core_email(OWNER_EMAIL, f"💼 Corporate pricing request — {company.strip() or name}",
+               f"""<div style="background:#f6f7f9;padding:26px">
+<table style="max-width:640px;margin:0 auto;background:#fff;border:1px solid #e2e5ea;
+border-radius:12px;width:100%;font:14px/1.6 -apple-system,sans-serif;border-collapse:collapse">
+<tr><td style="padding:24px 26px;border-bottom:1px solid #e2e5ea">
+<div style="font:800 12px -apple-system,sans-serif;color:#ff5a1f;letter-spacing:.08em">
+CORPORATE ENQUIRY</div>
+<h2 style="margin:6px 0 2px;font-size:22px">{e(company.strip() or name)}</h2>
+<div style="color:#697084">wants pricing for portfolio monitoring</div>
+</td></tr>
+<tr><td style="padding:18px 26px;border-bottom:1px solid #e2e5ea">
+<table style="border-collapse:collapse">
+{row("Name", name)}{row("Company", company.strip())}
+{row("Email", email)}{row("Phone", phone.strip())}
+{row("Sites", sites)}{row("Servers", servers.strip())}
+</table></td></tr>
+{f'<tr><td style="padding:18px 26px;border-bottom:1px solid #e2e5ea">'
+ f'<div style="color:#697084;font-size:13px;margin-bottom:5px">Notes</div>'
+ f'<div>{e(notes.strip())}</div></td></tr>' if notes.strip() else ''}
+<tr><td style="padding:18px 26px">
+<a href="mailto:{e(email)}" style="display:inline-block;background:#ff5a1f;color:#fff;
+text-decoration:none;font-weight:700;padding:11px 20px;border-radius:8px">Reply to {e(name)}</a>
+</td></tr></table></div>""")
+    return RedirectResponse("/corporate?sent=1", 303)
+
+
+@app.get("/admin/requests", response_class=HTMLResponse)
+def admin_requests(request: Request, aid=Depends(require_owner)):
+    a = _acct(aid)
+    pending, = (0,)
+    with closing(db()) as c:
+        c.execute("""CREATE TABLE IF NOT EXISTS corp_requests(
+            id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, name TEXT, company TEXT,
+            email TEXT, phone TEXT, sites TEXT, servers TEXT, notes TEXT)""")
+        rows = c.execute("SELECT * FROM corp_requests ORDER BY ts DESC").fetchall()
+    tr = "".join(
+        f'<tr><td class="mut">{time.strftime("%b %d %H:%M", time.localtime(r["ts"]))}</td>'
+        f'<td><b>{e(r["company"] or r["name"])}</b>'
+        f'<div class="mut" style="font-size:12.5px">{e(r["name"])}</div></td>'
+        f'<td><a href="mailto:{e(r["email"])}">{e(r["email"])}</a>'
+        f'<div class="mut" style="font-size:12.5px">{e(r["phone"] or "")}</div></td>'
+        f'<td class="mut">{e(r["sites"])} sites'
+        f'{" · " + e(r["servers"]) + " servers" if r["servers"] else ""}</td>'
+        f'<td class="mut">{e((r["notes"] or "")[:70])}</td></tr>' for r in rows)
+    body = (f'<table><thead><tr><th>When</th><th>Company</th><th>Contact</th><th>Size</th>'
+            f'<th>Notes</th></tr></thead><tbody>{tr}</tbody></table>'
+            if rows else '<p class="mut">No corporate enquiries yet.</p>')
+    return HTMLResponse(shell(f"""<div class="wrap">
+<h1>Corporate enquiries</h1>
+<p class="mut">{len(rows)} request{"s" if len(rows) != 1 else ""}. Each one also emailed
+to you when it arrived.</p>{body}</div>""",
+        acct=a["email"], owner=True, cur="admin", title="Corporate enquiries"))
 
 @app.get("/healthz")
 def healthz():

@@ -147,7 +147,8 @@ def handle(site_row, suppressed=frozenset()):
     p = plan(tier)
     up, detail, checks = confirmed(url, p["confirmations"])
     now = time.time()
-    con = sqlite3.connect(DB, timeout=20)
+    con = sqlite3.connect(DB, timeout=30)
+    con.execute('PRAGMA busy_timeout=30000')
     con.row_factory = sqlite3.Row
     try:
         s = con.execute("SELECT * FROM sites WHERE id=?", (sid,)).fetchone()
@@ -203,7 +204,8 @@ def corporate_pass(account_row):
     that sit on a server currently believed down, so the per-site pass can skip
     them entirely rather than emailing about each consequence."""
     aid = account_row["id"]
-    con = sqlite3.connect(DB, timeout=20)
+    con = sqlite3.connect(DB, timeout=30)
+    con.execute('PRAGMA busy_timeout=30000')
     con.row_factory = sqlite3.Row
     try:
         con.execute("""CREATE TABLE IF NOT EXISTS servers(
@@ -256,7 +258,8 @@ def corporate_pass(account_row):
 
 
 def due(now):
-    con = sqlite3.connect(DB, timeout=20)
+    con = sqlite3.connect(DB, timeout=30)
+    con.execute('PRAGMA busy_timeout=30000')
     con.row_factory = sqlite3.Row
     try:
         rows = con.execute("""SELECT s.*, COALESCE(a.plan,'starter') plan

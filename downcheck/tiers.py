@@ -34,8 +34,25 @@ PLANS = {
         "for": "Checkout flows, trading, booking engines, anything where a "
                "minute of downtime is measured in thousands.",
     },
+    "corporate": {
+        "key": "corporate", "name": "Corporate", "price": None, "interval": 86400,
+        "human": "servers every 2 minutes, sites daily",
+        "confirmations": 2,
+        "blurb": "For portfolios. We group your sites by server and check the server "
+                 "first. One stopped machine sends one email — not one per site.",
+        "for": "Agencies, holding companies, anyone running dozens of properties.",
+        "request": True,
+        "features": [
+            "Sites grouped automatically by the server they run on",
+            "A server is only blamed after two different hostnames fail",
+            "One alert per server outage, not one per affected site",
+            "Silence sites you already know are broken",
+            "Unlimited sites, servers and recipients",
+            "Priced on portfolio size — talk to us",
+        ],
+    },
 }
-ORDER = ["starter", "pro", "realtime"]
+ORDER = ["starter", "pro", "realtime", "corporate"]
 
 # Codes that grant a plan without going through Stripe. Used for testing and
 # for comping accounts. Recorded on the account so it is auditable later.

@@ -60,20 +60,31 @@ def page() -> str:
 <div><h3>{e(t)}</h3><p>{e(body)}</p>
 <p class="fix"><b>What we do:</b> {e(fix)}</p></div></div>""" for ic, t, body, fix in CAUSES)
 
-    tiers = "".join(f"""<div class="tier{' feat' if k == 'pro' else ''}">
-<div class="tname">{e(PLANS[k]['name'])}</div>
-<div class="tamt">${PLANS[k]['price']:,}<span>/mo</span></div>
-<div class="tfreq">checks {e(PLANS[k]['human'])}</div>
-<p>{e(PLANS[k]['blurb'])}</p>
-<ul class="plist">
-<li>{86400 // PLANS[k]['interval']:,} check{'s' if 86400 // PLANS[k]['interval'] != 1 else ''} per site, per day</li>
-<li>{PLANS[k]['confirmations']} confirmations before any alert</li>
-<li>Unlimited sites and recipients</li>
-<li>Down and recovery alerts</li>
-</ul>
-<div class="tfor">{e(PLANS[k]['for'])}</div>
-<a class="btn" style="width:100%;text-align:center" href="/signup">Start</a>
-</div>""" for k in ORDER)
+    def _tier(k):
+        p = PLANS[k]
+        if p.get("request"):
+            feats = "".join(f"<li>{e(x)}</li>" for x in p["features"])
+            return (f'<div class="tier corp"><div class="tname">{e(p["name"])}</div>'
+                    f'<div class="tamt req">Let&rsquo;s talk</div>'
+                    f'<div class="tfreq">{e(p["human"])}</div>'
+                    f'<p>{e(p["blurb"])}</p><ul class="plist">{feats}</ul>'
+                    f'<div class="tfor">{e(p["for"])}</div>'
+                    f'<a class="btn" style="width:100%;text-align:center" href="/corporate">'
+                    f'Request pricing</a></div>')
+        per = 86400 // p["interval"]
+        return (f'<div class="tier{" feat" if k == "pro" else ""}">'
+                f'<div class="tname">{e(p["name"])}</div>'
+                f'<div class="tamt">${p["price"]:,}<span>/mo</span></div>'
+                f'<div class="tfreq">checks {e(p["human"])}</div>'
+                f'<p>{e(p["blurb"])}</p><ul class="plist">'
+                f'<li>{per:,} check{"s" if per != 1 else ""} per site, per day</li>'
+                f'<li>{p["confirmations"]} confirmations before any alert</li>'
+                f'<li>Unlimited sites and recipients</li>'
+                f'<li>Down and recovery alerts</li></ul>'
+                f'<div class="tfor">{e(p["for"])}</div>'
+                f'<a class="btn" style="width:100%;text-align:center" href="/signup">Start</a></div>')
+
+    tiers = "".join(_tier(k) for k in ORDER)
 
     return f"""<!doctype html><html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -138,7 +149,9 @@ border-left:2px solid var(--acc);padding:9px 13px;border-radius:0 8px 8px 0}}
 .card{{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:22px}}
 .card h3{{margin:0 0 7px;font-size:17px}}
 .card p{{color:var(--mut);margin:0;font-size:14.5px}}
-.tiers{{display:grid;grid-template-columns:repeat(auto-fit,minmax(272px,1fr));gap:18px}}
+.tiers{{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:16px}}
+.tier.corp{{border-color:var(--acc);background:linear-gradient(180deg,rgba(255,90,31,.07),transparent)}}
+.tamt.req{{font-size:31px}}
 .tier{{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:26px;
 display:flex;flex-direction:column}}
 .tier.feat{{border-color:var(--acc);box-shadow:0 0 0 1px rgba(255,90,31,.25)}}
