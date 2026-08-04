@@ -14,6 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 BASE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE)
 from tiers import plan  # noqa: E402
+import corporate  # noqa: E402
 
 DB = os.path.join(BASE, "downcheck.db")
 CORE = "https://medigap.plus"
@@ -135,8 +136,13 @@ Website Down Checkers · checked from outside your network
 </td></tr></table></div>"""
 
 
-def handle(site_row):
-    """Check one site and act on a confirmed state change."""
+def handle(site_row, suppressed=frozenset()):
+    """Check one site and act on a confirmed state change.
+
+    Two reasons an alert is withheld: the site sits on a server already reported
+    down (the outage was emailed once, at server level), or the site is not
+    expected to be live — never built, or already known-broken in the operator's
+    own system. Both are still checked and recorded, just not emailed."""
     sid, url, tier = site_row["id"], site_row["url"], site_row["plan"]
     p = plan(tier)
     up, detail, checks = confirmed(url, p["confirmations"])
@@ -158,6 +164,7 @@ def handle(site_row):
         since = s["since"] if (not flip and s["since"]) else now
         con.execute("""UPDATE sites SET last_up=?, last_detail=?, last_checked=?, since=?
                        WHERE id=?""", (int(up), detail, now, since, sid))
+        alertable = bool(s["expect_live"]) and sid not in suppressed
         if flip:
             mins = None
             if up:
@@ -170,16 +177,80 @@ def handle(site_row):
                 con.execute("INSERT INTO incidents(site_id,started,detail) VALUES(?,?,?)",
                             (sid, now, detail))
             con.commit()
-            recips = [r["email"] for r in
-                      con.execute("SELECT email FROM recipients WHERE site_id=?", (sid,))]
-            subj = (f"🔴 {url} is DOWN" if not up else
-                    f"🟢 {url} is back up" + (f" — {mins}m outage" if mins else ""))
-            body = mail_body(url, up, detail, mins, checks)
-            for r in recips:
-                send(r, subj, body)
-            print(f"  {'RECOVERED' if up else 'DOWN'} {url} ({p['name']}) — {detail} "
-                  f"→ {len(recips)} recipient(s)", flush=True)
+            if alertable:
+                recips = [r["email"] for r in
+                          con.execute("SELECT email FROM recipients WHERE site_id=?", (sid,))]
+                subj = (f"🔴 {url} is DOWN" if not up else
+                        f"🟢 {url} is back up" + (f" — {mins}m outage" if mins else ""))
+                body = mail_body(url, up, detail, mins, checks)
+                for r in recips:
+                    send(r, subj, body)
+                print(f"  {'RECOVERED' if up else 'DOWN'} {url} ({p['name']}) — {detail} "
+                      f"→ {len(recips)} recipient(s)", flush=True)
+            else:
+                why = ("server already reported down" if sid in suppressed
+                       else "not expected live — suppressed")
+                print(f"  (silent) {url} {'down' if not up else 'up'} — {why}", flush=True)
         con.commit()
+    finally:
+        con.close()
+
+
+
+# ---------- corporate mode ----------
+def corporate_pass(account_row):
+    """Server-first sweep for one corporate account. Returns the set of site ids
+    that sit on a server currently believed down, so the per-site pass can skip
+    them entirely rather than emailing about each consequence."""
+    aid = account_row["id"]
+    con = sqlite3.connect(DB, timeout=20)
+    con.row_factory = sqlite3.Row
+    try:
+        con.execute("""CREATE TABLE IF NOT EXISTS servers(
+            account_id INTEGER, ip TEXT, up INTEGER, detail TEXT, since REAL,
+            checked_at REAL, PRIMARY KEY(account_id, ip))""")
+        sites = con.execute("SELECT * FROM sites WHERE account_id=? AND active=1",
+                            (aid,)).fetchall()
+        if not sites:
+            return set()
+        groups, unresolved = corporate.group_by_ip(sites)
+        prev = {r["ip"]: r for r in
+                con.execute("SELECT * FROM servers WHERE account_id=?", (aid,))}
+        recips = [r["email"] for r in con.execute(
+            """SELECT DISTINCT email FROM recipients WHERE site_id IN
+               (SELECT id FROM sites WHERE account_id=?)""", (aid,))]
+        now = time.time()
+        suppressed = set()
+
+        for ip, members in groups.items():
+            up, detail, tested = corporate.server_state(ip, members, probe)
+            was = prev.get(ip)
+            first = was is None
+            flip = (not first) and bool(was["up"]) != up
+            since = was["since"] if (was and not flip and was["since"]) else now
+            con.execute("""INSERT INTO servers(account_id,ip,up,detail,since,checked_at)
+                           VALUES(?,?,?,?,?,?)
+                           ON CONFLICT(account_id,ip) DO UPDATE SET
+                             up=excluded.up, detail=excluded.detail,
+                             since=excluded.since, checked_at=excluded.checked_at""",
+                        (aid, ip, int(up), detail, since, now))
+            if not up:
+                suppressed |= {m["id"] for m in members}
+            if flip:
+                live_n = sum(1 for m in members if m["expect_live"])
+                if not up:
+                    subj = (f"🔴 Server {ip} is DOWN — {len(members)} sites affected")
+                    body = corporate.server_email(ip, members, detail, live_n)
+                else:
+                    mins = int((now - (was["since"] or now)) / 60) if was else 0
+                    subj = f"🟢 Server {ip} recovered — {len(members)} sites back"
+                    body = corporate.server_recovered_email(ip, members, mins)
+                for r in recips:
+                    send(r, subj, body)
+                print(f"  SERVER {'DOWN' if not up else 'UP'} {ip} "
+                      f"({len(members)} sites) → {len(recips)} recipient(s)", flush=True)
+        con.commit()
+        return suppressed
     finally:
         con.close()
 
@@ -201,14 +272,32 @@ def due(now):
     return out
 
 
+CORP_INTERVAL = int(os.environ.get("CORP_INTERVAL", "120"))
+
+
 def main():
     print("checker daemon started", flush=True)
+    last_corp = 0.0
+    suppressed = set()
     while True:
         start = time.time()
+        if start - last_corp >= CORP_INTERVAL:
+            con = sqlite3.connect(DB, timeout=20); con.row_factory = sqlite3.Row
+            try:
+                corps = con.execute(
+                    "SELECT * FROM accounts WHERE account_type='corporate'").fetchall()
+            except sqlite3.OperationalError:
+                corps = []
+            finally:
+                con.close()
+            suppressed = set()
+            for a in corps:
+                suppressed |= corporate_pass(a)
+            last_corp = start
         batch = due(start)
         if batch:
             with ThreadPoolExecutor(max_workers=16) as ex:
-                list(ex.map(handle, batch))
+                list(ex.map(lambda s: handle(s, suppressed), batch))
         time.sleep(max(0.75, 1.0 - (time.time() - start)))
 
 

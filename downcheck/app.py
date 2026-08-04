@@ -48,12 +48,14 @@ def init_db():
             status TEXT NOT NULL DEFAULT 'trial',
             must_change INTEGER NOT NULL DEFAULT 0,
             plan TEXT NOT NULL DEFAULT 'starter',
+            account_type TEXT NOT NULL DEFAULT 'standard',
             coupon TEXT,
             stripe_customer TEXT, stripe_sub TEXT, is_owner INTEGER DEFAULT 0);
         CREATE TABLE IF NOT EXISTS sites(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             account_id INTEGER NOT NULL, url TEXT NOT NULL, label TEXT,
-            active INTEGER DEFAULT 1, created REAL NOT NULL,
+            active INTEGER DEFAULT 1, expect_live INTEGER NOT NULL DEFAULT 1,
+            suppress_reason TEXT, created REAL NOT NULL,
             last_up INTEGER, last_detail TEXT, last_checked REAL, since REAL);
         CREATE TABLE IF NOT EXISTS recipients(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -67,11 +69,21 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_rec_site ON recipients(site_id);
         """)
         for col, ddl in (("plan", "TEXT NOT NULL DEFAULT 'starter'"), ("coupon", "TEXT"),
-                         ("must_change", "INTEGER NOT NULL DEFAULT 0")):
+                         ("must_change", "INTEGER NOT NULL DEFAULT 0"),
+                         ("account_type", "TEXT NOT NULL DEFAULT 'standard'")):
             try:
                 c.execute(f"ALTER TABLE accounts ADD COLUMN {col} {ddl}")
             except sqlite3.OperationalError:
                 pass          # already present
+        for col, ddl in (("expect_live", "INTEGER NOT NULL DEFAULT 1"),
+                         ("suppress_reason", "TEXT")):
+            try:
+                c.execute(f"ALTER TABLE sites ADD COLUMN {col} {ddl}")
+            except sqlite3.OperationalError:
+                pass
+        c.execute("""CREATE TABLE IF NOT EXISTS servers(
+            account_id INTEGER, ip TEXT, up INTEGER, detail TEXT, since REAL,
+            checked_at REAL, PRIMARY KEY(account_id, ip))""")
         c.commit()
 
 
@@ -185,6 +197,7 @@ border:1px solid currentColor;font-weight:700}
 .tag{background:var(--bg);border:1px solid var(--line);border-radius:7px;padding:3px 9px;
 font-size:12.5px;display:inline-flex;align-items:center;gap:7px;margin:0 5px 5px 0}
 .tag a{color:var(--mut);text-decoration:none;font-weight:700}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13.5px}
 """
 
 
@@ -387,7 +400,30 @@ def dashboard(request: Request, aid=Depends(require)):
                  f'<td class="mut">{len(recs[s["id"]])} recipient'
                  f'{"s" if len(recs[s["id"]]) != 1 else ""}</td>'
                  f'<td class="mut">{_dur(s["since"])}</td>'
+                 f'<td>{"" if s["expect_live"] else chr(60)+"span class=mut style=font-size:12px"+chr(62)+"silent"+chr(60)+"/span"+chr(62)}</td>'
                  f'<td><a class="btn ghost sm" href="/app/site/{s["id"]}">Manage</a></td></tr>')
+
+    servers_html = ""
+    if a["account_type"] == "corporate":
+        with closing(db()) as c:
+            srv = c.execute("""SELECT s.*, (SELECT COUNT(*) FROM sites x WHERE x.account_id=?
+                               AND x.id IN (SELECT id FROM sites)) AS dummy
+                               FROM servers s WHERE s.account_id=? ORDER BY s.up, s.ip""",
+                            (aid, aid)).fetchall()
+        rows_s = ""
+        for r in srv:
+            lamp = "green" if r["up"] else "red"
+            rows_s += (f'<tr><td><span class="lamp {lamp}"></span>'
+                       f'<b class="{"" if r["up"] else "bad"}">{"up" if r["up"] else "DOWN"}</b></td>'
+                       f'<td class="mono">{e(r["ip"])}</td>'
+                       f'<td class="mut">{e(r["detail"] or "")}</td>'
+                       f'<td class="mut">{_dur(r["since"])}</td></tr>')
+        if rows_s:
+            servers_html = (f'<h2>Servers</h2><p class="mut">Each server is checked before its '
+                            f'sites. If a server fails twice on two different hostnames, you get '
+                            f'one email about the server — not one per site.</p>'
+                            f'<table><thead><tr><th>State</th><th>IP</th><th>Detail</th>'
+                            f'<th>For</th></tr></thead><tbody>{rows_s}</tbody></table>')
     table = (f'<table><thead><tr><th>Status</th><th>Website</th><th>Alerts to</th>'
              f'<th>For</th><th></th></tr></thead><tbody>{rows}</tbody></table>'
              if sites else '<p class="mut">No sites yet — add one below.</p>')
@@ -406,7 +442,8 @@ def dashboard(request: Request, aid=Depends(require)):
                    + "</div>")
     return HTMLResponse(shell(f"""<div class="wrap">
 <h1>Your websites</h1><p class="mut">Checked every 60 seconds from outside your network.</p>
-{banner}{table}
+{banner}{servers_html}
+<h2>Websites</h2>{table}
 <h2>Add a website</h2>
 <form class="inline" method="post" action="/app/site/add">
 <div><label>Website</label><input name="site" placeholder="example.com" required></div>
