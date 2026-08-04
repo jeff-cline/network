@@ -75,6 +75,11 @@ def main():
         domain TEXT PRIMARY KEY, ok INTEGER, code INTEGER,
         https INTEGER, detail TEXT, checked_at REAL)""")
     con.commit()
+    # Domains that leave the built state (restored to their original host, held)
+    # kept stale rows here and showed up as failures forever.
+    con.execute("""DELETE FROM site_checks WHERE domain NOT IN
+                   (SELECT domain FROM build_queue WHERE state='built')""")
+    con.commit()
     rows = con.execute("SELECT domain,title FROM build_queue WHERE state='built'").fetchall()
     if not rows:
         print("  no built sites to check"); return
