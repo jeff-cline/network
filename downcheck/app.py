@@ -7,7 +7,9 @@ and an owner-side admin console. Stripe is wired but inert until keys exist:
 signups land as 'trial' rather than being blocked, so the product is usable
 and testable before billing is switched on.
 """
-import hashlib, hmac, html, json, os, re, secrets, sqlite3, time
+import hashlib, hmac, html, json, os, re, secrets, sqlite3, sys, time
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from tiers import PLANS, ORDER, COUPONS, plan as tier_plan
 from contextlib import closing
 from http import HTTPStatus
 
@@ -44,6 +46,8 @@ def init_db():
             email TEXT UNIQUE NOT NULL, company TEXT, pw_hash TEXT NOT NULL,
             salt TEXT NOT NULL, created REAL NOT NULL,
             status TEXT NOT NULL DEFAULT 'trial',
+            plan TEXT NOT NULL DEFAULT 'starter',
+            coupon TEXT,
             stripe_customer TEXT, stripe_sub TEXT, is_owner INTEGER DEFAULT 0);
         CREATE TABLE IF NOT EXISTS sites(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -61,6 +65,11 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_sites_acct ON sites(account_id);
         CREATE INDEX IF NOT EXISTS idx_rec_site ON recipients(site_id);
         """)
+        for col, ddl in (("plan", "TEXT NOT NULL DEFAULT 'starter'"), ("coupon", "TEXT")):
+            try:
+                c.execute(f"ALTER TABLE accounts ADD COLUMN {col} {ddl}")
+            except sqlite3.OperationalError:
+                pass          # already present
         c.commit()
 
 
@@ -339,12 +348,19 @@ def dashboard(request: Request, aid=Depends(require)):
     table = (f'<table><thead><tr><th>Status</th><th>Website</th><th>Alerts to</th>'
              f'<th>For</th><th></th></tr></thead><tbody>{rows}</tbody></table>'
              if sites else '<p class="mut">No sites yet — add one below.</p>')
-    banner = ""
+    pl = tier_plan(a["plan"])
+    planbar = (f'<div class="note" style="display:flex;gap:14px;align-items:center;flex-wrap:wrap">'
+               f'<b>{e(pl["name"])} plan</b>'
+               f'<span class="mut">checks {e(pl["human"])} · '
+               f'{pl["confirmations"]} confirmations before any alert</span>'
+               f'<span style="flex:1"></span>'
+               f'<a class="btn sm" href="/plans">Change plan</a></div>')
+    banner = planbar
     if a["status"] == "trial":
-        banner = ('<div class="note"><b>Trial account.</b> Monitoring is active. '
-                  + ("Billing is not yet configured on this instance."
-                     if not STRIPE_SK else '<a href="/subscribe">Add payment</a> to keep it running.')
-                  + "</div>")
+        banner += ('<div class="note"><b>Trial.</b> Monitoring is live. '
+                   + ("Billing is not yet switched on for this instance."
+                      if not STRIPE_SK else '<a href="/plans">Choose a plan</a> to continue.')
+                   + "</div>")
     return HTMLResponse(shell(f"""<div class="wrap">
 <h1>Your websites</h1><p class="mut">Checked every 60 seconds from outside your network.</p>
 {banner}{table}
@@ -492,6 +508,95 @@ def admin_customer(cid: int, request: Request, aid=Depends(require_owner)):
 <tbody>{ih or '<tr><td colspan=4 class=mut>None recorded</td></tr>'}</tbody></table>
 </div>""", acct=a["email"], owner=True, cur="admin", title=cust["email"]))
 
+
+
+# ---------- plans, upgrades and coupons ----------
+@app.get("/plans", response_class=HTMLResponse)
+def plans_page(request: Request, err: str = "", ok: str = "", aid=Depends(require)):
+    a = _acct(aid)
+    cur = a["plan"]
+    cards = ""
+    for k in ORDER:
+        p = PLANS[k]
+        is_cur = (k == cur)
+        per_day = 86400 // p["interval"]
+        cards += f"""<div class="plan {'cur' if is_cur else ''}">
+<div class="pname">{e(p['name'])}</div>
+<div class="pamt">${p['price']:,}<span>/mo</span></div>
+<div class="pfreq">checks {e(p['human'])}</div>
+<p>{e(p['blurb'])}</p>
+<ul>
+<li>{per_day:,} check{'s' if per_day != 1 else ''} per site per day</li>
+<li>{p['confirmations']} independent confirmations before any alert</li>
+<li>Unlimited recipients &amp; unlimited sites</li>
+<li>Down and recovery alerts with duration</li>
+</ul>
+<div class="pfor">{e(p['for'])}</div>
+{'<div class="curbadge">Your current plan</div>' if is_cur else
+ f'<form method="post" action="/plans/select"><input type="hidden" name="plan" value="{k}">'
+ f'<button class="btn" type="submit" style="width:100%">Choose {e(p["name"])}</button></form>'}
+</div>"""
+    ee = f'<div class="err">{e(err)}</div>' if err else ""
+    okk = f'<div class="note">{e(ok)}</div>' if ok else ""
+    return HTMLResponse(shell(f"""<div class="wrap">
+<p class="mut"><a href="/app">← Dashboard</a></p>
+<h1>Choose your monitoring speed</h1>
+<p class="mut">Every plan includes unlimited sites and unlimited alert recipients.
+The difference is how quickly you find out.</p>
+{ee}{okk}
+<div class="plans">{cards}</div>
+
+<h2>Have a coupon?</h2>
+<p class="mut">Applies a plan directly, without going through checkout.</p>
+<form class="inline" method="post" action="/plans/coupon">
+<div><label>Coupon code</label><input name="code" placeholder="code" required></div>
+<button class="btn ghost" type="submit">Apply</button></form>
+</div>
+<style>
+.plans{{display:grid;grid-template-columns:repeat(auto-fit,minmax(268px,1fr));gap:18px;margin-bottom:30px}}
+.plan{{background:var(--panel);border:1px solid var(--line);border-radius:15px;padding:24px;
+display:flex;flex-direction:column}}
+.plan.cur{{border-color:var(--acc)}}
+.pname{{font-size:13px;text-transform:uppercase;letter-spacing:.07em;color:var(--mut);font-weight:700}}
+.pamt{{font-size:42px;font-weight:800;letter-spacing:-.03em;margin:6px 0 2px}}
+.pamt span{{font-size:15px;color:var(--mut);font-weight:600}}
+.pfreq{{color:var(--acc);font-weight:700;font-size:14.5px;margin-bottom:12px}}
+.plan p{{color:var(--mut);font-size:14px;margin:0 0 14px}}
+.plan ul{{list-style:none;padding:0;margin:0 0 16px}}
+.plan li{{padding:5px 0 5px 22px;position:relative;font-size:13.5px;color:var(--mut)}}
+.plan li:before{{content:"✓";position:absolute;left:0;color:var(--ok);font-weight:800}}
+.pfor{{font-size:13px;color:var(--mut);border-top:1px solid var(--line);padding-top:12px;
+margin-bottom:16px;flex:1}}
+.curbadge{{text-align:center;padding:10px;border:1px dashed var(--acc);border-radius:9px;
+color:var(--acc);font-weight:700;font-size:14px}}
+</style>""", acct=a["email"], owner=bool(a["is_owner"]), cur="app", title="Plans"))
+
+
+@app.post("/plans/select")
+def plans_select(request: Request, plan: str = Form(...), aid=Depends(require)):
+    if plan not in PLANS:
+        return RedirectResponse("/plans?err=Unknown+plan", 303)
+    if not STRIPE_SK:
+        # Billing not configured on this instance: record the intent rather than
+        # pretending a payment happened.
+        return RedirectResponse(
+            "/plans?err=Checkout+is+not+enabled+yet.+Use+a+coupon+to+test,+or+add+Stripe+keys.", 303)
+    return RedirectResponse(f"/subscribe?plan={plan}", 303)
+
+
+@app.post("/plans/coupon")
+def plans_coupon(request: Request, code: str = Form(...), aid=Depends(require)):
+    c_ = COUPONS.get(code.strip().lower())
+    if not c_:
+        return RedirectResponse("/plans?err=That+coupon+code+is+not+recognised", 303)
+    with closing(db()) as c:
+        c.execute("UPDATE accounts SET plan=?, status=?, coupon=? WHERE id=?",
+                  (c_["plan"], "comped" if c_.get("free") else "active",
+                   code.strip().lower(), aid))
+        c.commit()
+    p = PLANS[c_["plan"]]
+    return RedirectResponse(
+        f"/plans?ok=Coupon+applied.+You+are+on+{p['name']}+—+checks+{p['human'].replace(' ', '+')}.", 303)
 
 @app.get("/healthz")
 def healthz():

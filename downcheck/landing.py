@@ -44,6 +44,9 @@ CAUSES = [
      "200 OK serving the wrong content is still an alert."),
 ]
 
+import sys as _sys, os as _os
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+from tiers import PLANS, ORDER
 PLAN_PRICE = "9"
 
 
@@ -57,12 +60,27 @@ def page() -> str:
 <div><h3>{e(t)}</h3><p>{e(body)}</p>
 <p class="fix"><b>What we do:</b> {e(fix)}</p></div></div>""" for ic, t, body, fix in CAUSES)
 
+    tiers = "".join(f"""<div class="tier{' feat' if k == 'pro' else ''}">
+<div class="tname">{e(PLANS[k]['name'])}</div>
+<div class="tamt">${PLANS[k]['price']:,}<span>/mo</span></div>
+<div class="tfreq">checks {e(PLANS[k]['human'])}</div>
+<p>{e(PLANS[k]['blurb'])}</p>
+<ul class="plist">
+<li>{86400 // PLANS[k]['interval']:,} check{'s' if 86400 // PLANS[k]['interval'] != 1 else ''} per site, per day</li>
+<li>{PLANS[k]['confirmations']} confirmations before any alert</li>
+<li>Unlimited sites and recipients</li>
+<li>Down and recovery alerts</li>
+</ul>
+<div class="tfor">{e(PLANS[k]['for'])}</div>
+<a class="btn" style="width:100%;text-align:center" href="/signup">Start</a>
+</div>""" for k in ORDER)
+
     return f"""<!doctype html><html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Website Down Checkers — Know the moment your site goes down</title>
-<meta name="description" content="Independent uptime monitoring that alerts your whole team
-the moment your website goes down — whether it is an unpaid invoice, a stopped server, a DNS
-change or an attack. ${PLAN_PRICE}/month.">
+<meta name="description" content="Independent uptime monitoring that alerts your whole team the
+moment your website goes down. Daily checks from $9/month, or every 3 seconds on Real-time.
+Confirmed alerts, no false positives.">
 <link rel="canonical" href="https://websitedowncheckers.com/">
 <meta property="og:title" content="Know the moment your website goes down">
 <meta property="og:description" content="Most businesses find out their site is down from a
@@ -120,6 +138,17 @@ border-left:2px solid var(--acc);padding:9px 13px;border-radius:0 8px 8px 0}}
 .card{{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:22px}}
 .card h3{{margin:0 0 7px;font-size:17px}}
 .card p{{color:var(--mut);margin:0;font-size:14.5px}}
+.tiers{{display:grid;grid-template-columns:repeat(auto-fit,minmax(272px,1fr));gap:18px}}
+.tier{{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:26px;
+display:flex;flex-direction:column}}
+.tier.feat{{border-color:var(--acc);box-shadow:0 0 0 1px rgba(255,90,31,.25)}}
+.tname{{font-size:12.5px;text-transform:uppercase;letter-spacing:.08em;color:var(--mut);font-weight:700}}
+.tamt{{font-size:44px;font-weight:800;letter-spacing:-.035em;margin:6px 0 2px}}
+.tamt span{{font-size:15px;color:var(--mut);font-weight:600}}
+.tfreq{{color:var(--acc);font-weight:700;margin-bottom:13px}}
+.tier p{{color:var(--mut);font-size:14.5px;margin:0 0 14px}}
+.tfor{{font-size:13px;color:var(--mut);border-top:1px solid var(--line);padding-top:13px;
+margin:6px 0 18px;flex:1}}
 .price{{background:var(--panel);border:1px solid var(--acc);border-radius:18px;
 padding:34px;max-width:440px;margin:0 auto;text-align:center}}
 .amt{{font-size:58px;font-weight:800;letter-spacing:-.04em;line-height:1}}
@@ -152,7 +181,7 @@ footer a:hover{{color:var(--acc)}}
 <p class="sub">By then you have lost the sale, the trust, and the search ranking. We watch your
 site from outside your network and tell everyone who needs to know — within a minute.</p>
 <div class="cta-row">
-<a class="btn" href="/signup">Start monitoring — ${PLAN_PRICE}/month</a>
+<a class="btn" href="/signup">Start monitoring — from ${PLAN_PRICE}/month</a>
 <a class="btn ghost" href="#causes">See what we catch</a>
 </div>
 <p class="trust">No contract. Cancel any time. Unlimited team recipients.</p>
@@ -195,22 +224,13 @@ wrong site is still broken. We check what is actually served.</p></div>
 </div></section>
 
 <section id="pricing"><div class="wrap">
-<h2 style="text-align:center">One plan. Everything included.</h2>
-<p class="lede" style="margin:0 auto 32px;text-align:center">No tiers, no add-ons, no per-seat
-charges.</p>
-<div class="price">
-<div class="amt">${PLAN_PRICE}<span>/month</span></div>
-<ul class="plist">
-<li>Checks every 60 seconds</li>
-<li>Unlimited email recipients</li>
-<li>Multiple websites per account</li>
-<li>Down <b>and</b> recovery alerts with duration</li>
-<li>DNS, port, status code and content checks</li>
-<li>Independent, off-network monitoring</li>
-<li>Cancel any time</li>
-</ul>
-<a class="btn" style="width:100%;text-align:center" href="/signup">Start monitoring</a>
-</div>
+<h2 style="text-align:center">Choose how fast you find out</h2>
+<p class="lede" style="margin:0 auto 34px;text-align:center">Every plan includes unlimited
+websites and unlimited alert recipients. The only difference is speed.</p>
+<div class="tiers">{tiers}</div>
+<p class="lede" style="margin:30px auto 0;text-align:center;font-size:15px">
+Every alert is confirmed by multiple independent checks before it is sent.
+A single network blip never emails your team.</p>
 </div></section>
 
 <footer><div class="wrap">
