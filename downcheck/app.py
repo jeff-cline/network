@@ -46,6 +46,7 @@ def init_db():
             email TEXT UNIQUE NOT NULL, company TEXT, pw_hash TEXT NOT NULL,
             salt TEXT NOT NULL, created REAL NOT NULL,
             status TEXT NOT NULL DEFAULT 'trial',
+            must_change INTEGER NOT NULL DEFAULT 0,
             plan TEXT NOT NULL DEFAULT 'starter',
             coupon TEXT,
             stripe_customer TEXT, stripe_sub TEXT, is_owner INTEGER DEFAULT 0);
@@ -65,7 +66,8 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_sites_acct ON sites(account_id);
         CREATE INDEX IF NOT EXISTS idx_rec_site ON recipients(site_id);
         """)
-        for col, ddl in (("plan", "TEXT NOT NULL DEFAULT 'starter'"), ("coupon", "TEXT")):
+        for col, ddl in (("plan", "TEXT NOT NULL DEFAULT 'starter'"), ("coupon", "TEXT"),
+                         ("must_change", "INTEGER NOT NULL DEFAULT 0")):
             try:
                 c.execute(f"ALTER TABLE accounts ADD COLUMN {col} {ddl}")
             except sqlite3.OperationalError:
@@ -293,6 +295,8 @@ def login(request: Request, email: str = Form(...), password: str = Form(...)):
     if not a or not hmac.compare_digest(hash_pw(password, a["salt"]), a["pw_hash"]):
         return RedirectResponse("/login?err=Incorrect+email+or+password", 303)
     request.session["acct"] = a["id"]
+    if a["must_change"]:
+        return RedirectResponse("/change-password", 303)
     return RedirectResponse("/app", 303)
 
 
@@ -301,6 +305,38 @@ def logout(request: Request):
     request.session.clear()
     return RedirectResponse("/", 303)
 
+
+
+# ---------- forced password change ----------
+@app.get("/change-password", response_class=HTMLResponse)
+def change_form(request: Request, err: str = "", aid=Depends(require)):
+    a = _acct(aid)
+    ee = f'<div class="err">{e(err)}</div>' if err else ""
+    forced = bool(a["must_change"])
+    return HTMLResponse(shell(f"""<div class="card"><h1>Set your password</h1>
+<p class="mut">{"Your temporary password must be replaced before you can continue."
+                if forced else "Choose a new password for your account."}</p>{ee}
+<form method="post" action="/change-password">
+<label>New password <span class="mut">(9+ characters)</span></label>
+<input type="password" name="p1" required autofocus autocomplete="new-password">
+<label>Confirm</label><input type="password" name="p2" required autocomplete="new-password">
+<button class="btn" type="submit" style="width:100%;margin-top:18px">Set password</button>
+</form>{"" if forced else '<p class="mut" style="margin-top:14px;font-size:13px"><a href="/app">Back</a></p>'}
+</div>""", acct=a["email"], owner=bool(a["is_owner"]), title="Set password"))
+
+
+@app.post("/change-password")
+def change_pw(request: Request, p1: str = Form(...), p2: str = Form(...), aid=Depends(require)):
+    if p1 != p2:
+        return RedirectResponse("/change-password?err=Passwords+do+not+match", 303)
+    if len(p1) < 9:
+        return RedirectResponse("/change-password?err=Use+at+least+9+characters", 303)
+    salt = secrets.token_hex(16)
+    with closing(db()) as c:
+        c.execute("UPDATE accounts SET pw_hash=?, salt=?, must_change=0 WHERE id=?",
+                  (hash_pw(p1, salt), salt, aid))
+        c.commit()
+    return RedirectResponse("/app", 303)
 
 # ---------- customer app ----------
 def _acct(aid):
@@ -319,8 +355,15 @@ def _dur(ts):
     return f"{m // 1440}d {(m % 1440) // 60}h"
 
 
+def _must_change(aid):
+    a = _acct(aid)
+    return bool(a and a["must_change"])
+
+
 @app.get("/app", response_class=HTMLResponse)
 def dashboard(request: Request, aid=Depends(require)):
+    if _must_change(aid):
+        return RedirectResponse("/change-password", 303)
     a = _acct(aid)
     with closing(db()) as c:
         sites = c.execute("SELECT * FROM sites WHERE account_id=? ORDER BY id", (aid,)).fetchall()
@@ -448,6 +491,8 @@ def del_recipient(sid: int, rid: int, request: Request, aid=Depends(require)):
 # ---------- owner admin ----------
 @app.get("/admin", response_class=HTMLResponse)
 def admin(request: Request, aid=Depends(require_owner)):
+    if _must_change(aid):
+        return RedirectResponse("/change-password", 303)
     a = _acct(aid)
     with closing(db()) as c:
         rows = c.execute("""SELECT a.*,
@@ -513,6 +558,8 @@ def admin_customer(cid: int, request: Request, aid=Depends(require_owner)):
 # ---------- plans, upgrades and coupons ----------
 @app.get("/plans", response_class=HTMLResponse)
 def plans_page(request: Request, err: str = "", ok: str = "", aid=Depends(require)):
+    if _must_change(aid):
+        return RedirectResponse("/change-password", 303)
     a = _acct(aid)
     cur = a["plan"]
     cards = ""
@@ -544,15 +591,19 @@ def plans_page(request: Request, err: str = "", ok: str = "", aid=Depends(requir
 <p class="mut">Every plan includes unlimited sites and unlimited alert recipients.
 The difference is how quickly you find out.</p>
 {ee}{okk}
-<div class="plans">{cards}</div>
-
-<h2>Have a coupon?</h2>
-<p class="mut">Applies a plan directly, without going through checkout.</p>
+<div class="coupon">
 <form class="inline" method="post" action="/plans/coupon">
-<div><label>Coupon code</label><input name="code" placeholder="code" required></div>
-<button class="btn ghost" type="submit">Apply</button></form>
+<div><label style="margin-top:0">Have a coupon code?</label>
+<input name="code" placeholder="Enter code" required autocomplete="off"></div>
+<button class="btn" type="submit">Apply coupon</button></form>
+<p class="mut" style="margin:9px 0 0;font-size:13px">Applies your plan immediately —
+no card required.</p>
+</div>
+<div class="plans">{cards}</div>
 </div>
 <style>
+.coupon{{background:var(--panel);border:1px solid var(--acc);border-radius:13px;
+padding:18px 20px;margin-bottom:22px;max-width:560px}}
 .plans{{display:grid;grid-template-columns:repeat(auto-fit,minmax(268px,1fr));gap:18px;margin-bottom:30px}}
 .plan{{background:var(--panel);border:1px solid var(--line);border-radius:15px;padding:24px;
 display:flex;flex-direction:column}}
