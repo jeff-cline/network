@@ -437,7 +437,8 @@ def _nav(cur, pending, ready, queued, built):
              ("/ready", "ready", "Ready to build", ready), ("/q", "q", "Q", queued),
              ("/built", "built", "Built", built), ("/leads", "leads", "Leads", ""),
              ("/admin/globals", "globals", "Globals", ""),
-             ("/admin/acquire", "acquire", "Acquire", "")]
+             ("/admin/acquire", "acquire", "Acquire", ""),
+             ("/status", "status", "Uptime", "")]
     return '<div class="tabs">' + "".join(
         f'<a class="tab {"on" if key == cur else ""}" href="{h}">{l}'
         + (f' <span class="n">{n}</span>' if n != "" else "") + '</a>'
@@ -1272,6 +1273,71 @@ async def acquire_buy(request: Request, domain: str = Form(...), title: str = Fo
                    kws[0], kws[1], kws[2], time.time()))
         c.commit()
     return RedirectResponse("/q", 303)
+
+
+# ---------- uptime status ----------
+@app.get("/status", response_class=HTMLResponse)
+def status_page(request: Request, user=Depends(require_login)):
+    pending, ready_n, queued_n, built = _counts()
+    with closing(db()) as c:
+        c.execute("""CREATE TABLE IF NOT EXISTS monitor(
+            key TEXT PRIMARY KEY, label TEXT, up INTEGER, detail TEXT,
+            since REAL, checked_at REAL)""")
+        rows = c.execute("SELECT * FROM monitor ORDER BY up, key").fetchall()
+
+    def dur(ts):
+        if not ts:
+            return ""
+        m = int((time.time() - ts) / 60)
+        if m < 60:
+            return f"{m}m"
+        if m < 1440:
+            return f"{m//60}h {m%60}m"
+        return f"{m//1440}d {(m%1440)//60}h"
+
+    servers = [r for r in rows if r["key"].startswith("server:")]
+    sites = [r for r in rows if r["key"].startswith("site:")]
+
+    def table(items, kind):
+        if not items:
+            return '<p class="muted">Nothing checked yet — the monitor runs every 2 minutes.</p>'
+        tr = ""
+        for r in items:
+            lamp = "green" if r["up"] else "red"
+            word = "UP" if r["up"] else "DOWN"
+            target = r["key"].split(":", 1)[1]
+            link = (f'<a href="https://{e(target)}" target="_blank" rel="noopener">{e(target)}</a>'
+                    if kind == "site" else e(target))
+            tr += (f'<tr><td class="stat"><span class="lamp {lamp}"></span> '
+                   f'<b class="{"" if r["up"] else "bad"}">{word}</b></td>'
+                   f'<td class="dom">{link}</td>'
+                   f'<td>{e(r["label"] or "")}</td>'
+                   f'<td class="muted">{e(r["detail"] or "")}</td>'
+                   f'<td class="muted">{dur(r["since"])}</td></tr>')
+        return (f'<table><thead><tr><th>State</th><th>{"Server" if kind=="server" else "Site"}</th>'
+                f'<th>Role</th><th>Detail</th><th>For</th></tr></thead><tbody>{tr}</tbody></table>')
+
+    down = sum(1 for r in rows if not r["up"])
+    last = max([r["checked_at"] or 0 for r in rows], default=0)
+    banner = ('<div class="note" style="border-color:var(--bad);background:rgba(207,72,77,.1)">'
+              f'<b class="bad">{down} target{"s" if down != 1 else ""} down.</b> '
+              'An email alert was sent when this changed.</div>'
+              if down else
+              '<div class="note"><b>All targets up.</b> You are emailed the moment any of '
+              'this changes — and again when it recovers.</div>')
+
+    return shell(f"""<div class="wrap">
+{_nav('status', pending, ready_n, queued_n, built)}
+<h2 style="margin:0 0 4px">Uptime</h2>
+<p class="muted">Checked every 2 minutes from the network server, and every 3 minutes from
+R0cketShip watching back — so an outage on either still reaches you.
+Last check {dur(last)} ago.</p>
+{banner}
+<h3 class="muted" style="font-size:13px;text-transform:uppercase;letter-spacing:.07em;margin:26px 0 10px">Servers</h3>
+{table(servers, "server")}
+<h3 class="muted" style="font-size:13px;text-transform:uppercase;letter-spacing:.07em;margin:26px 0 10px">Critical sites</h3>
+{table(sites, "site")}
+</div>""", user=user, title="Uptime — Network")
 
 @app.get("/healthz")
 def healthz():

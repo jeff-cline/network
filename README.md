@@ -51,3 +51,15 @@ not enough, since several Cloudflare zones are live sites.
 
 Certbot validates www and IPv6 as well as the apex, so repointing must also delete
 AAAA records and set a www A record, or validation fails against Cloudflare's IPv6.
+
+## Uptime monitoring
+`ops/monitor.py` (on NETWORK, systemd timer every 2 min) checks 5 servers by IP and 12
+critical sites by hostname. Emails via CORE on STATE CHANGE only — one alert per outage,
+plus a recovery notice. `/status` shows the live board.
+
+`ops/watchdog.sh` (on R0cketShip, timer every 3 min) watches NETWORK from outside it.
+A monitor on the box it watches cannot report that box being down — which is how the
+2026-08-04 Vultr suspension went unnoticed. Both alert paths are tested end to end.
+
+Known gap: both servers are on the same Vultr account, so an account-level suspension
+silences both. An external check (or one on a machine outside Vultr) would close it.
