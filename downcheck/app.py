@@ -9,7 +9,7 @@ and testable before billing is switched on.
 """
 import hashlib, hmac, html, json, os, re, secrets, sqlite3, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from tiers import PLANS, ORDER, COUPONS, plan as tier_plan
+from tiers import PLANS, ORDER, COUPONS, COMMON, plan as tier_plan
 from contextlib import closing
 from http import HTTPStatus
 
@@ -624,16 +624,16 @@ def plans_page(request: Request, err: str = "", ok: str = "", aid=Depends(requir
 <div class="pfor">{e(p['for'])}</div>
 {cta}</div>"""
             continue
-        cards += f"""<div class="plan {'cur' if is_cur else ''}">
+        feats = "".join(f"<li>{e(x)}</li>" for x in COMMON)
+        cards += f"""<div class="plan {'cur' if is_cur else ''}{' feat' if p.get('featured') else ''}">
+{'<div class="ribbon">Most popular</div>' if p.get('featured') else ''}
 <div class="pname">{e(p['name'])}</div>
 <div class="pamt">${p['price']:,}<span>/mo</span></div>
 <div class="pfreq">checks {e(p['human'])}</div>
 <p>{e(p['blurb'])}</p>
 <ul>
-<li>{per_day:,} check{'s' if per_day != 1 else ''} per site per day</li>
-<li>{p['confirmations']} independent confirmations before any alert</li>
-<li>Unlimited recipients &amp; unlimited sites</li>
-<li>Down and recovery alerts with duration</li>
+<li>{per_day:,} check{'s' if per_day != 1 else ''} per site, per day</li>
+{feats}
 </ul>
 <div class="pfor">{e(p['for'])}</div>
 {'<div class="curbadge">Your current plan</div>' if is_cur else
@@ -665,6 +665,10 @@ padding:18px 20px;margin-bottom:22px;max-width:560px}}
 .plan{{background:var(--panel);border:1px solid var(--line);border-radius:15px;padding:24px;
 display:flex;flex-direction:column}}
 .plan.cur{{border-color:var(--acc)}}
+.plan.feat{{border-color:var(--acc);position:relative}}
+.ribbon{{position:absolute;top:-11px;left:50%;transform:translateX(-50%);background:var(--acc);
+color:#fff;font-size:11px;font-weight:800;letter-spacing:.05em;padding:3px 12px;border-radius:999px;
+text-transform:uppercase;white-space:nowrap}}
 .plan.corp{{border-color:var(--acc);background:linear-gradient(180deg,rgba(255,90,31,.06),transparent)}}
 .pamt.req{{font-size:30px}}
 .pname{{font-size:13px;text-transform:uppercase;letter-spacing:.07em;color:var(--mut);font-weight:700}}

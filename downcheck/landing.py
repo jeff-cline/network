@@ -46,7 +46,7 @@ CAUSES = [
 
 import sys as _sys, os as _os
 _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
-from tiers import PLANS, ORDER
+from tiers import PLANS, ORDER, COMMON
 PLAN_PRICE = "9"
 
 
@@ -72,15 +72,15 @@ def page() -> str:
                     f'<a class="btn" style="width:100%;text-align:center" href="/corporate">'
                     f'Request pricing</a></div>')
         per = 86400 // p["interval"]
-        return (f'<div class="tier{" feat" if k == "pro" else ""}">'
+        feats = "".join(f"<li>{e(x)}</li>" for x in COMMON)
+        return (f'<div class="tier{" feat" if p.get("featured") else ""}">'
+                f'{"<div class=ribbon>Most popular</div>" if p.get("featured") else ""}'
                 f'<div class="tname">{e(p["name"])}</div>'
                 f'<div class="tamt">${p["price"]:,}<span>/mo</span></div>'
                 f'<div class="tfreq">checks {e(p["human"])}</div>'
                 f'<p>{e(p["blurb"])}</p><ul class="plist">'
                 f'<li>{per:,} check{"s" if per != 1 else ""} per site, per day</li>'
-                f'<li>{p["confirmations"]} confirmations before any alert</li>'
-                f'<li>Unlimited sites and recipients</li>'
-                f'<li>Down and recovery alerts</li></ul>'
+                f'{feats}</ul>'
                 f'<div class="tfor">{e(p["for"])}</div>'
                 f'<a class="btn" style="width:100%;text-align:center" href="/signup">Start</a></div>')
 
@@ -90,7 +90,7 @@ def page() -> str:
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Website Down Checkers — Know the moment your site goes down</title>
 <meta name="description" content="Independent uptime monitoring that alerts your whole team the
-moment your website goes down. Daily checks from $9/month, or every 3 seconds on Real-time.
+moment your website goes down. Daily checks from $9/month, minute-by-minute from $29, or every 3 seconds on Real-time.
 Confirmed alerts, no false positives.">
 <link rel="canonical" href="https://websitedowncheckers.com/">
 <meta property="og:title" content="Know the moment your website goes down">
@@ -154,7 +154,10 @@ border-left:2px solid var(--acc);padding:9px 13px;border-radius:0 8px 8px 0}}
 .tamt.req{{font-size:31px}}
 .tier{{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:26px;
 display:flex;flex-direction:column}}
-.tier.feat{{border-color:var(--acc);box-shadow:0 0 0 1px rgba(255,90,31,.25)}}
+.tier.feat{{border-color:var(--acc);box-shadow:0 0 0 1px rgba(255,90,31,.25);position:relative}}
+.ribbon{{position:absolute;top:-11px;left:50%;transform:translateX(-50%);background:var(--acc);
+color:#fff;font-size:11px;font-weight:800;letter-spacing:.05em;padding:3px 12px;border-radius:999px;
+text-transform:uppercase;white-space:nowrap}}
 .tname{{font-size:12.5px;text-transform:uppercase;letter-spacing:.08em;color:var(--mut);font-weight:700}}
 .tamt{{font-size:44px;font-weight:800;letter-spacing:-.035em;margin:6px 0 2px}}
 .tamt span{{font-size:15px;color:var(--mut);font-weight:600}}
