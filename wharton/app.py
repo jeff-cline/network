@@ -337,6 +337,7 @@ align-items:center;flex-wrap:wrap}
 
 
 def shell(body, user=None, title="Wharton Jelly", nav=True):
+    connect_links = "".join(f'<a href="/connect/{sl}">{e(t)}</a>' for sl, t, _, _ in C.CONNECT)
     links = ""
     right = ('<a class="btn ghost sm" href="/login">Log in</a>'
              '<a class="btn sm" href="/providers">Provider access</a>')
@@ -365,8 +366,16 @@ def shell(body, user=None, title="Wharton Jelly", nav=True):
 <a href="/providers#referrals">Referral network</a>
 <a href="/login">Provider log in</a></div>
 <div><h4>Education</h4>
+<a href="/modules">Education library</a>
+<a href="/faq">Common questions</a>
 <a href="{C.IORE_URL}" target="_blank" rel="noopener">{e(C.IORE_NAME)}</a>
 <a href="/education">Clinical resources</a></div>
+<div><h4>Connect</h4>{connect_links}</div>
+</div>
+<div style="border-top:1px solid var(--line);margin-top:30px;padding-top:20px;
+color:var(--mut);font-size:12.5px">
+Education, protocols and validation are provided through the {e(C.IORE_NAME)}, an independent
+third party. &copy; {time.strftime('%Y')} Wharton Jelly.
 </div></div></footer></body></html>"""
 
 
@@ -1250,3 +1259,204 @@ def healthz():
                 "leads": c.execute("SELECT COUNT(*) n FROM leads").fetchone()["n"],
                 "monday": bool(setting("monday_token")),
                 "stripe": bool(setting("stripe_sk"))}
+
+
+# ---------- provider application ----------
+@app.get("/providers/apply", response_class=HTMLResponse)
+def providers_apply(request: Request):
+    """Was linked from three places before it existed. It is the provider signup,
+    given its own URL and framing so the funnel reads as an application."""
+    if current(request):
+        return RedirectResponse("/portal", 303)
+    return RedirectResponse("/signup?as=provider", 303)
+
+
+# ---------- module pages ----------
+@app.get("/modules", response_class=HTMLResponse)
+def modules_index(request: Request):
+    u = acct(current(request)) if current(request) else None
+    cards = "".join(f"""<a class="card" style="text-decoration:none;color:inherit;display:block"
+href="/modules/{m['slug']}"><div class="kicker">
+{'Clinical education' if m['audience']=='provider' else 'Patient education'}</div>
+<h3>{m['title']}</h3><p>{e(m['body'][:130])}…</p>
+<p style="margin-top:12px;color:var(--teal);font-weight:700;font-size:14px">Read →</p></a>"""
+                    for m in C.MODULES)
+    return HTMLResponse(shell(f"""<section style="border-top:0"><div class="wrap">
+<h2>Education <span class="t">library</span></h2>
+<p class="lede">Clinical and patient modules, reproduced from our education material.
+Validation and protocols are provided through the {e(C.IORE_NAME)}, an independent third
+party.</p>
+<div class="grid">{cards}</div></div></section>""", user=u, title="Education library"))
+
+
+@app.get("/modules/{slug}", response_class=HTMLResponse)
+def module_page(slug: str, request: Request):
+    u = acct(current(request)) if current(request) else None
+    m = next((x for x in C.MODULES if x["slug"] == slug), None)
+    if not m:
+        raise HTTPException(404)
+    signed_in = bool(u)
+    audience = m["audience"]
+    others = "".join(f'<a class="card" style="text-decoration:none;color:inherit;display:block" '
+                     f'href="/modules/{o["slug"]}"><h3 style="font-size:16px">{o["title"]}</h3></a>'
+                     for o in C.MODULES if o["slug"] != slug)
+    full = f'<div class="card" style="max-width:820px"><p>{e(m["body"])}</p></div>'
+    body = full if signed_in else gate(full,
+        "Full modules are available to registered members.", audience)
+    return HTMLResponse(shell(f"""<section style="border-top:0"><div class="wrap">
+<p class="mut"><a href="/modules">← Education library</a></p>
+<div class="kicker" style="color:var(--orange);font-weight:800;letter-spacing:.09em;
+font-size:12px;text-transform:uppercase">
+{'For providers' if audience == 'provider' else 'For patients'}</div>
+<h2 style="margin-top:8px">{m['title']}</h2>
+{body}
+<h3 style="margin-top:34px">More from the library</h3>
+<div class="grid">{others}</div>
+</div></section>""", user=u, title=m["title"]))
+
+
+@app.get("/faq", response_class=HTMLResponse)
+def faq_page(request: Request):
+    u = acct(current(request)) if current(request) else None
+    items = "".join(f'<div class="card" style="margin-bottom:12px"><h3>{e(q)}</h3>'
+                    f'<p>{e(a)}</p></div>' for q, a in C.FAQ)
+    return HTMLResponse(shell(f"""<section style="border-top:0"><div class="wrap">
+<h2>Common <span class="t">questions</span></h2>
+<p class="lede">Answers drawn from our clinical and patient education material.</p>
+<div style="max-width:820px">{items}</div>
+</div></section>""", user=u, title="Questions"))
+
+
+# ---------- footer enquiry desks ----------
+@app.get("/connect/{slug}", response_class=HTMLResponse)
+def connect_form(slug: str, request: Request, err: str = "", sent: str = ""):
+    u = acct(current(request)) if current(request) else None
+    d = next((x for x in C.CONNECT if x[0] == slug), None)
+    if not d:
+        raise HTTPException(404)
+    _, title, sub, hint = d
+    if sent:
+        return HTMLResponse(shell(f"""<section style="border-top:0"><div class="wrap">
+<div class="card form" style="text-align:center;max-width:560px">
+<div style="font-size:44px;line-height:1;margin-bottom:8px">✅</div>
+<h2 style="font-size:25px">Thank you</h2>
+<p class="mut">Your enquiry about <b>{e(title)}</b> has reached us. We read every one and will
+come back to you.</p>
+<a class="btn" href="/">Back to the site</a></div></div></section>""",
+            user=u, title=f"{title} — sent"))
+    ee = f'<div class="err">{e(err)}</div>' if err else ""
+    opts = "".join(f'<option value="{s}">{s}</option>' for s in STATES)
+    others = "".join(f'<a href="/connect/{s}">{e(t)}</a>'
+                     for s, t, _, _ in C.CONNECT if s != slug)
+    return HTMLResponse(shell(f"""<section style="border-top:0"><div class="wrap">
+<div style="display:grid;grid-template-columns:.85fr 1.15fr;gap:34px;align-items:start;
+max-width:1020px;margin:0 auto" class="cwrap">
+<div>
+<div class="kicker" style="color:var(--orange);font-weight:800;letter-spacing:.09em;
+font-size:12px;text-transform:uppercase">Get in touch</div>
+<h2 style="margin:8px 0 10px;font-size:32px">{e(title)}</h2>
+<p class="lede" style="margin-bottom:20px">{e(sub)}</p>
+<p class="mut" style="font-size:14px;border-top:1px solid var(--line);padding-top:16px">
+Other desks</p>
+<div style="display:flex;flex-direction:column;gap:6px">{others}</div>
+</div>
+<div class="card form" style="margin:0;max-width:none">
+<h3 style="margin:0 0 4px;font-size:19px">Send us your details</h3>
+<p class="mut" style="font-size:14px;margin:0 0 4px">{e(hint)}</p>{ee}
+<form method="post" action="/connect/{slug}">
+<div class="two"><div><label>First name</label><input name="first" required></div>
+<div><label>Last name</label><input name="last" required></div></div>
+<div class="two"><div><label>Email</label><input name="email" type="email" required></div>
+<div><label>Phone</label><input name="phone" type="tel" required></div></div>
+<div class="three"><div><label>City</label><input name="city"></div>
+<div><label>State</label><select name="state"><option value=""></option>{opts}</select></div>
+<div><label>ZIP</label><input name="zip" inputmode="numeric" maxlength="10"></div></div>
+<label>Website</label><input name="website" placeholder="https://">
+<label>Anything you would like to share</label>
+<textarea name="message" rows="4" placeholder="{e(hint)}"></textarea>
+<button class="btn" type="submit" style="width:100%;margin-top:18px">Submit</button>
+</form></div></div></div></section>
+<style>@media(max-width:860px){{.cwrap{{grid-template-columns:1fr!important}}}}</style>""",
+        user=u, title=f"{title} — Wharton Jelly"))
+
+
+@app.post("/connect/{slug}")
+async def connect_submit(slug: str, request: Request):
+    d = next((x for x in C.CONNECT if x[0] == slug), None)
+    if not d:
+        raise HTTPException(404)
+    _, title, _, _ = d
+    form = await request.form()
+    g = lambda k: (form.get(k) or "").strip()
+    first, last, email, phone = g("first"), g("last"), g("email").lower(), g("phone")
+    from urllib.parse import quote_plus
+    if not first or not last:
+        return RedirectResponse(f"/connect/{slug}?err={quote_plus('Please give your name')}", 303)
+    if "@" not in email or "." not in email.split("@")[-1]:
+        return RedirectResponse(
+            f"/connect/{slug}?err={quote_plus('Please give a valid email address')}", 303)
+    if not phone:
+        return RedirectResponse(
+            f"/connect/{slug}?err={quote_plus('A phone number is required')}", 303)
+
+    zip_ = re.sub(r"[^0-9]", "", g("zip"))[:5]
+    detail = " | ".join(x for x in [
+        f"desk: {title}", f"city: {g('city')}", f"state: {g('state')}", f"zip: {zip_}",
+        f"website: {g('website')}", f"message: {g('message')}"] if not x.endswith(": "))
+
+    with closing(db()) as c:
+        lid = c.execute("""INSERT INTO leads(kind,account_id,created,zip,source,status)
+                           VALUES('partner',NULL,?,?,?,'new')""",
+                        (time.time(), zip_, f"connect:{slug}")).lastrowid
+        c.execute("""INSERT INTO lead_notes(lead_id,author_id,ts,note,source)
+                     VALUES(?,NULL,?,?,'form')""",
+                  (lid, time.time(),
+                   f"{first} {last} · {email} · {phone}\n{detail}"))
+        c.commit()
+
+    # Into the JV pipeline at CORE, then a notification.
+    core_jv(f"{first} {last}".strip(), email, phone, f"[JV/{title}] {detail}")
+    rows = [("Desk", title), ("Name", f"{first} {last}"), ("Email", email), ("Phone", phone),
+            ("City", g("city")), ("State", g("state")), ("ZIP", zip_),
+            ("Website", g("website")), ("Message", g("message"))]
+    tr = "".join(f'<tr><td style="padding:6px 16px 6px 0;color:#697084;font-size:13px;'
+                 f'white-space:nowrap">{e(k)}</td>'
+                 f'<td style="padding:6px 0;font-size:14.5px"><b>{e(v) or "—"}</b></td></tr>'
+                 for k, v in rows)
+    email_out(OWNER_EMAIL, f"🤝 {title} — {first} {last}",
+              f"""<div style="background:#f6f7f9;padding:26px">
+<table style="max-width:620px;margin:0 auto;background:#fff;border:1px solid #e2e5ea;
+border-radius:12px;width:100%;font:14px/1.6 -apple-system,sans-serif;border-collapse:collapse">
+<tr><td style="padding:22px 24px;border-bottom:1px solid #e2e5ea">
+<div style="font:800 12px sans-serif;color:#ff7a1a;letter-spacing:.08em">
+{e(title.upper())}</div>
+<h2 style="margin:6px 0 0;font-size:21px">{e(first)} {e(last)}</h2></td></tr>
+<tr><td style="padding:16px 24px"><table style="border-collapse:collapse">{tr}</table></td></tr>
+<tr><td style="padding:14px 24px;border-top:1px solid #e2e5ea">
+<a href="mailto:{e(email)}" style="display:inline-block;background:#ff7a1a;color:#fff;
+text-decoration:none;font-weight:700;padding:10px 18px;border-radius:8px">
+Reply to {e(first)}</a></td></tr></table></div>""")
+    return RedirectResponse(f"/connect/{slug}?sent=1", 303)
+
+
+def core_jv(name, email, phone, notes):
+    """Push a partnership enquiry into the JV pipeline at CORE."""
+    if not (CORE_KEY and CORE_SECRET):
+        return False
+    import subprocess
+    payload = json.dumps({"name": name, "email": email, "phone": phone or "n/a",
+                          "creatorRef": "whartonjelly.com", "notes": notes[:1000]})
+    for i in range(3):
+        try:
+            p = subprocess.run(["curl", "-sS", "--max-time", "25", "-X", "POST",
+                                "-H", f"x-core-key: {CORE_KEY}",
+                                "-H", f"x-core-secret: {CORE_SECRET}",
+                                "-H", "content-type: application/json", "-d", payload,
+                                CORE + "/api/core/lead"], capture_output=True, text=True,
+                               timeout=35)
+            if json.loads(p.stdout).get("ok"):
+                return True
+        except Exception:
+            pass
+        time.sleep(1.2 * (i + 1))
+    return False

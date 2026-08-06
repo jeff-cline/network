@@ -133,3 +133,54 @@ IMAGE_SLOTS = [
     ("consumer_2",    "Patient education — what to ask"),
     ("science_1",     "Allogeneic science"),
 ]
+
+
+# Footer enquiry desks. Each renders the same styled form and routes to the JV
+# pipeline, so partnership interest is captured with the same rigour as leads.
+CONNECT = [
+    ("investor-relations", "Investor Relations",
+     "Financials, growth and the shape of the opportunity.",
+     "Tell us about your firm and what you are looking to understand."),
+    ("media-press", "Media & Press",
+     "Interviews, commentary and background for journalists.",
+     "Your outlet, deadline and the angle you are working on."),
+    ("advertise", "Advertise With Us",
+     "Reach clinicians building regenerative practices.",
+     "Your product or service and the audience you want to reach."),
+    ("sponsor", "Sponsor Us",
+     "Education, events and clinical programming.",
+     "What you would like to sponsor and at what level."),
+    ("become-a-provider", "Become a Provider",
+     "Advanced support, documentation, protocols and product access.",
+     "Your practice, speciality and where you are in the process."),
+    ("manufacturers", "Manufacturers",
+     "Supply, tissue sourcing and distribution partnerships.",
+     "What you manufacture and the partnership you have in mind."),
+    ("links", "Links",
+     "Partnerships, referrals and reciprocal links.",
+     "Your site and the kind of link relationship you are proposing."),
+]
+
+FAQ = [
+    ("What is Wharton's Jelly?",
+     "Wharton's Jelly is a human cell and tissue product (HCTP). As described in our clinical "
+     "education material, these are structural allografts meant to supplement local cartilage "
+     "defects."),
+    ("Are these products drugs?",
+     "No. As stated in our patient education material: these products are not drugs and do not "
+     "treat diseases, but they can support your body's natural healing processes."),
+    ("Why do you avoid the term \u201cstem cells\u201d?",
+     "Our clinical education material is explicit: providers should avoid unregulated terms like "
+     "\u201cstem cells\u201d and instead focus on tissue-specific supplementation for "
+     "cartilage-based defects. Using the term in clinical practice is described as "
+     "scientifically inaccurate and legally risky."),
+    ("What do these products actually supply?",
+     "They supply collagenic growth factors (like type I, II, and III collagen) that may help the "
+     "body heal itself at a cellular level\u2014especially when inflammation is controlled."),
+    ("Who validates the education?",
+     "Education and clinical support are provided through the Institute of Regenerative "
+     "Education, an independent third party, with protocols curated by Dr. Scott Martin."),
+    ("How do patient referrals work?",
+     "Patients who register are matched by ZIP code to a participating provider. Providers "
+     "control whether they receive referrals, and a provider may hold a ZIP exclusively."),
+]
