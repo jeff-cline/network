@@ -368,7 +368,7 @@ def shell(body, user=None, title="Wharton Jelly", nav=True):
 <div><h4>Education</h4>
 <a href="/modules">Education library</a>
 <a href="/faq">Common questions</a>
-<a href="{C.IORE_URL}" target="_blank" rel="noopener">{e(C.IORE_NAME)}</a>
+<a href="/go/iore">{e(C.IORE_NAME)}</a>
 <a href="/education">Clinical resources</a></div>
 <div><h4>Connect</h4>{connect_links}</div>
 </div>
@@ -563,10 +563,11 @@ def education_page(request: Request):
 <div class="grid">{feats}</div>
 <p class="lede" style="margin-top:26px">{e(C.HUB_CLOSE)}</p>
 {gate('<div class="card"><h3>Private clinical community</h3><p>' + e(C.FB_NOTE).capitalize()
-      + '.</p></div>',
+      + '.</p><p style="margin-top:12px"><a class="btn sm ghost" href="/go/community">'
+      'Request access →</a></p></div>',
       "Community access is available to registered providers.", "provider")}
-<p style="margin-top:22px"><a class="btn ghost" href="{C.IORE_URL}" target="_blank"
-rel="noopener">Visit {e(C.IORE_NAME)} →</a></p>
+<p style="margin-top:22px"><a class="btn ghost" href="/go/iore">
+Visit {e(C.IORE_NAME)} →</a></p>
 </div></section>""", user=u, title=f"{C.IORE_NAME} — Wharton Jelly"))
 
 
@@ -927,8 +928,7 @@ def portal(request: Request, uid=Depends(require)):
  f'<button class="btn sm" type="submit">Request exclusive ZIP</button></form>'}</div>
 <div class="card"><div class="kicker">Education</div><h3>{e(C.IORE_NAME)}</h3>
 <p>{e(C.IORE_HEADLINE)}</p>
-<p style="margin-top:12px"><a class="btn sm ghost" href="{C.IORE_URL}" target="_blank"
-rel="noopener">Open →</a></p></div>
+<p style="margin-top:12px"><a class="btn sm ghost" href="/go/iore">Open →</a></p></div>
 </div>
 <h2 style="font-size:22px">Your referrals</h2>
 {f'<table><thead><tr><th>When</th><th>Patient</th><th>Contact</th><th>ZIP</th><th>Interest</th>'
@@ -1460,3 +1460,160 @@ def core_jv(name, email, phone, notes):
             pass
         time.sleep(1.2 * (i + 1))
     return False
+
+
+# ---------- outbound gate ----------
+def ext(key, label=None, cls="", btn=False):
+    """Render an outbound link as a gated hop. Nothing leaves this site without
+    us knowing who is leaving."""
+    dest = C.OUTBOUND.get(key)
+    if not dest:
+        return ""
+    text = label or dest[1]
+    c = f'class="{cls}"' if cls else ""
+    return f'<a {c} href="/go/{key}">{e(text)}{" →" if btn else ""}</a>'
+
+
+def _record_outbound(uid, key, request):
+    with closing(db()) as c:
+        c.execute("""CREATE TABLE IF NOT EXISTS outbound(
+            id INTEGER PRIMARY KEY AUTOINCREMENT, account_id INTEGER, dest TEXT,
+            ts REAL, ip TEXT)""")
+        c.execute("INSERT INTO outbound(account_id,dest,ts,ip) VALUES(?,?,?,?)",
+                  (uid, key, time.time(),
+                   (request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+                    or (request.client.host if request.client else ""))))
+        c.commit()
+
+
+@app.get("/go/{key}", response_class=HTMLResponse)
+def outbound(key: str, request: Request, step: str = "", err: str = ""):
+    dest = C.OUTBOUND.get(key)
+    if not dest:
+        raise HTTPException(404)
+    url, name, why = dest
+    uid = current(request)
+
+    # Known visitor: we already hold their details, so record and let them through.
+    if uid:
+        a = acct(uid)
+        if not a["must_change"]:
+            _record_outbound(uid, key, request)
+            with closing(db()) as c:
+                c.execute("""INSERT INTO lead_notes(lead_id,author_id,ts,note,source)
+                             SELECT id, NULL, ?, ?, 'system' FROM leads
+                             WHERE account_id=? ORDER BY id DESC LIMIT 1""",
+                          (time.time(), f"Followed outbound link to {name}.", uid))
+                c.commit()
+            return HTMLResponse(f"""<!doctype html><meta charset="utf-8">
+<meta http-equiv="refresh" content="0;url={e(url)}">
+<title>Continuing…</title><body style="background:#04141a;color:#e9f4f6;
+font:16px -apple-system,sans-serif;padding:60px;text-align:center">
+Taking you to {e(name)}… <a style="color:#19c2c9" href="{e(url)}">continue</a></body>""")
+
+    # Unknown visitor: choose audience, then give us your details.
+    if step not in ("provider", "consumer"):
+        return HTMLResponse(shell(f"""<section style="border-top:0"><div class="wrap">
+<div class="card form" style="max-width:620px;text-align:center">
+<div style="font-size:34px;line-height:1;margin-bottom:6px">🔒</div>
+<h2 style="font-size:26px;margin-bottom:6px">Before you continue</h2>
+<p class="mut" style="margin:0 0 4px">You are about to visit <b>{e(name)}</b>.</p>
+<p class="mut" style="margin:0 0 22px;font-size:14px">{e(why)}</p>
+<p style="font-weight:700;margin:0 0 14px">First — which are you?</p>
+<div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap">
+<a class="btn" href="/go/{key}?step=provider">I'm a doctor or provider</a>
+<a class="btn teal" href="/go/{key}?step=consumer">I'm a consumer or patient</a>
+</div>
+<p class="mut" style="margin-top:18px;font-size:13px">Already registered?
+<a href="/login?next=/go/{key}">Log in</a> and you will go straight through.</p>
+</div></div></section>""", title=f"Before you continue — {name}"))
+
+    ee = f'<div class="err">{e(err)}</div>' if err else ""
+    opts = "".join(f'<option value="{s}">{s}</option>' for s in STATES)
+    if step == "provider":
+        extra = f"""<label>Clinic or practice</label><input name="clinic" required>
+<label>NPI</label><input name="npi" required inputmode="numeric" placeholder="10-digit NPI">
+<label>Business address</label><input name="business_address" required>"""
+        head = "Doctor & provider details"
+    else:
+        extra = """<label>What are you looking for? <span class="mut">(optional)</span></label>
+<textarea name="interest" rows="3"></textarea>"""
+        head = "Your details"
+    return HTMLResponse(shell(f"""<section style="border-top:0"><div class="wrap">
+<div class="card form" style="max-width:620px">
+<p class="mut" style="margin:0"><a href="/go/{key}">← Back</a></p>
+<h2 style="font-size:24px;margin:6px 0 4px">{head}</h2>
+<p class="mut" style="margin:0 0 6px;font-size:14px">
+We will take you to <b>{e(name)}</b> as soon as this is complete.</p>{ee}
+<form method="post" action="/go/{key}?step={step}">
+<div class="two"><div><label>First name</label><input name="first" required autofocus></div>
+<div><label>Last name</label><input name="last" required></div></div>
+<div class="two"><div><label>Email</label><input name="email" type="email" required></div>
+<div><label>Phone</label><input name="phone" type="tel" required></div></div>
+<div class="three"><div><label>City</label><input name="city"></div>
+<div><label>State</label><select name="state"><option value=""></option>{opts}</select></div>
+<div><label>ZIP</label><input name="zip" required inputmode="numeric" maxlength="10"></div></div>
+{extra}
+<label>Create a password <span class="mut">(9+ characters)</span></label>
+<input name="password" type="password" required autocomplete="new-password">
+<button class="btn" type="submit" style="width:100%;margin-top:18px">
+Continue to {e(name)}</button>
+</form></div></div></section>""", title=f"{head} — {name}"))
+
+
+@app.post("/go/{key}")
+async def outbound_submit(key: str, request: Request, step: str = ""):
+    dest = C.OUTBOUND.get(key)
+    if not dest or step not in ("provider", "consumer"):
+        raise HTTPException(404)
+    url, name, _ = dest
+    form = await request.form()
+    g = lambda k: (form.get(k) or "").strip()
+    from urllib.parse import quote_plus
+    back = lambda m: RedirectResponse(f"/go/{key}?step={step}&err={quote_plus(m)}", 303)
+
+    email, pw = g("email").lower(), form.get("password") or ""
+    zip_ = re.sub(r"[^0-9]", "", g("zip"))[:5]
+    if "@" not in email or "." not in email.split("@")[-1]:
+        return back("Please give a valid email address")
+    if len(pw) < 9:
+        return back("Password must be at least 9 characters")
+    if not zip_ or len(zip_) < 5:
+        return back("A 5-digit ZIP code is required")
+    if step == "provider" and not re.fullmatch(r"\d{10}", re.sub(r"\D", "", g("npi"))):
+        return back("NPI must be 10 digits")
+
+    salt = secrets.token_hex(16)
+    with closing(db()) as c:
+        ex = c.execute("SELECT id FROM accounts WHERE email=?", (email,)).fetchone()
+        if ex:
+            return back("That email already has an account — please log in")
+        uid = c.execute("""INSERT INTO accounts(email,pw_hash,salt,role,first,last,phone,created)
+                           VALUES(?,?,?,?,?,?,?,?)""",
+                        (email, hash_pw(pw, salt), salt, step, g("first"), g("last"),
+                         g("phone"), time.time())).lastrowid
+        if step == "provider":
+            c.execute("""INSERT INTO providers(account_id,clinic,npi,city,state,zip,
+                         business_address,accepts_referrals,created)
+                         VALUES(?,?,?,?,?,?,?,1,?)""",
+                      (uid, g("clinic"), re.sub(r"\D", "", g("npi")), g("city"), g("state"),
+                       zip_, g("business_address"), time.time()))
+        else:
+            c.execute("""INSERT INTO consumers(account_id,city,state,zip,interest,created)
+                         VALUES(?,?,?,?,?,?)""",
+                      (uid, g("city"), g("state"), zip_, g("interest"), time.time()))
+        lead_id = c.execute("""INSERT INTO leads(kind,account_id,created,zip,source,status)
+                               VALUES(?,?,?,?,?,'new')""",
+                            (step, uid, time.time(), zip_, f"outbound:{key}")).lastrowid
+        c.execute("""INSERT INTO lead_notes(lead_id,author_id,ts,note,source)
+                     VALUES(?,NULL,?,?,'system')""",
+                  (lead_id, time.time(),
+                   f"Captured at the outbound gate on the way to {name}."))
+        c.commit()
+
+    request.session["uid"] = uid
+    if step == "consumer":
+        route_consumer(lead_id, zip_)
+    _notify_new(step, email, g, zip_, lead_id)     # owner + sales email, and Monday
+    _record_outbound(uid, key, request)
+    return RedirectResponse(url, 303)

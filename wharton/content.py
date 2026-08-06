@@ -184,3 +184,15 @@ FAQ = [
      "Patients who register are matched by ZIP code to a participating provider. Providers "
      "control whether they receive referrals, and a provider may hold a ZIP exclusively."),
 ]
+
+
+# Every destination we are willing to send a visitor to. The outbound gate only
+# redirects to something on this list — a free-form redirect parameter would be
+# an open redirect anyone could abuse to launder a phishing link off our domain.
+OUTBOUND = {
+    "iore":     (IORE_URL, IORE_NAME,
+                 "Our education and clinical validation partner, an independent third party."),
+    "iore-cert": ("https://www.iore.com/", "IORE Certification",
+                  "Regenerative Medicine Certification Course."),
+    "community": (FB_GROUP, "Private clinical community", FB_NOTE.capitalize() + "."),
+}
