@@ -196,3 +196,81 @@ OUTBOUND = {
                   "Regenerative Medicine Certification Course."),
     "community": (FB_GROUP, "Private clinical community", FB_NOTE.capitalize() + "."),
 }
+
+
+# --- video library -----------------------------------------------------------
+# Descriptions are quoted from the supplied material. Only entries with a real
+# URL play; the rest are visible placeholders the operator fills from the back
+# office. Nothing here invents a video that does not exist.
+FEATURED_VIDEO = {
+    "slug": "understanding-regenerative-medicine",
+    "title": "Understanding Regenerative Medicine",
+    "speaker": "Dr. Scott Martin",
+    "audience": "both",
+    "category": "Patient education",
+    "url": "https://www.loom.com/share/a149edd7eb77456ab237f81318571516",
+    "embed": "https://www.loom.com/embed/a149edd7eb77456ab237f81318571516",
+    "runtime": "",
+    "quote": ("Hello, I\u2019m Dr. Martin, and in this video, I explain the benefits of "
+              "regenerative therapies, particularly umbilical cord tissue-derived products like "
+              "Wharton's Jelly and their role in down-regulating inflammation and supplying "
+              "essential collagen for joint repair. As we age, our bodies lose the ability to "
+              "produce vital collagen types, which can hinder recovery from injuries. I emphasize "
+              "that these products are not drugs and do not treat diseases but can support your "
+              "body\u2019s natural healing processes. I encourage you to do your own research on "
+              "these therapies and have an open dialogue with your provider about how they might "
+              "fit into your recovery plan. Thank you for your time, and I wish you good health."),
+    "blurb": ("Dr. Martin explains what these products are, what they are not, and how to talk "
+              "to your provider about them."),
+}
+
+VIDEO_CATEGORIES = [
+    ("patient-education", "Patient education", "consumer",
+     "What these products are, in plain language."),
+    ("compliance", "Compliance & regulatory", "provider",
+     "Language, claims and the regulatory landscape."),
+    ("clinical-science", "Clinical science", "provider",
+     "Mechanism, allogeneic science and graft selection."),
+    ("practice-growth", "Practice & patient conversations", "provider",
+     "Presenting options and building patient confidence."),
+]
+
+VIDEOS = [
+    {"slug": "understanding-regenerative-medicine", "audience": "consumer",
+     "category": "patient-education", "title": "Understanding Regenerative Medicine",
+     "speaker": "Dr. Scott Martin",
+     "embed": "https://www.loom.com/embed/a149edd7eb77456ab237f81318571516",
+     "desc": ("Dr. Martin explains the benefits of regenerative therapies, particularly umbilical "
+              "cord tissue-derived products like Wharton's Jelly and their role in "
+              "down-regulating inflammation and supplying essential collagen for joint repair. As "
+              "we age, our bodies lose the ability to produce vital collagen types, which can "
+              "hinder recovery from injuries. He emphasizes that these products are not drugs and "
+              "do not treat diseases, but they can support your body's natural healing "
+              "processes.")},
+    {"slug": "talking-to-patients", "audience": "provider", "category": "practice-growth",
+     "title": "How do we talk to patients about \u201cStem Cells\u201d?", "speaker": "Dr. Scott Martin",
+     "embed": "",
+     "desc": ("When presenting human cell and tissue products (HCTPs) to patients, providers "
+              "should avoid unregulated terms like \u201cstem cells\u201d and instead focus on "
+              "tissue-specific supplementation for cartilage-based defects, explaining that these "
+              "products supply collagenic growth factors (like type I, II, and III collagen) that "
+              "may help the body heal itself at a cellular level\u2014especially when inflammation "
+              "is controlled.")},
+    {"slug": "regulatory-environment", "audience": "provider", "category": "compliance",
+     "title": "Regulatory Environment Around Stem Cells \u2014 Dispelling Myths",
+     "speaker": "Dr. Scott Martin", "embed": "",
+     "desc": ("A critical and detailed overview of the U.S. regulatory landscape surrounding stem "
+              "cells, emphasizing that using the term \u201cstem cells\u201d in clinical practice "
+              "is scientifically inaccurate and legally risky.")},
+    {"slug": "are-stem-cells-a-scam", "audience": "provider", "category": "compliance",
+     "title": "Are Stem Cells a Scam?", "speaker": "Dr. Scott Martin", "embed": "",
+     "desc": ("Dr. Martin addresses the misconception that \u201cstem cells\u201d are a cure-all, "
+              "emphasizing that successful regenerative outcomes depend not on magical products "
+              "but on proper clinical application rooted in scientific understanding\u2014"
+              "especially of collagenic differentiation.")},
+    {"slug": "allogeneic-science", "audience": "provider", "category": "clinical-science",
+     "title": "The basics behind Allogeneic Science", "speaker": "Dr. Scott Martin", "embed": "",
+     "desc": ("A science-based explanation of how allografts\u2014particularly Wharton's "
+              "Jelly\u2014contribute to structural support and localized tissue optimization "
+              "through collagenic signaling.")},
+]

@@ -106,7 +106,10 @@ def email_out(to, subject, body_html):
         return False
     import subprocess
     payload = json.dumps({"to": to, "subject": subject, "html": body_html})
-    for i in range(4):
+    # CORE rotates outbound mail across sender accounts and the pool has degraded
+    # to roughly a 50% failure rate. Eight attempts with growing backoff makes a
+    # missed notification vanishingly unlikely; each retry draws a fresh sender.
+    for i in range(8):
         try:
             p = subprocess.run(["curl", "-sS", "--max-time", "25", "-X", "POST",
                                 "-H", f"x-core-key: {CORE_KEY}",
@@ -118,7 +121,7 @@ def email_out(to, subject, body_html):
                 return True
         except Exception:
             pass
-        time.sleep(1.2 * (i + 1))
+        time.sleep(min(1.0 * (i + 1), 5.0))
     return False
 
 
@@ -366,6 +369,7 @@ def shell(body, user=None, title="Wharton Jelly", nav=True):
 <a href="/providers#referrals">Referral network</a>
 <a href="/login">Provider log in</a></div>
 <div><h4>Education</h4>
+<a href="/videos">Video library</a>
 <a href="/modules">Education library</a>
 <a href="/faq">Common questions</a>
 <a href="/go/iore">{e(C.IORE_NAME)}</a>
@@ -404,6 +408,8 @@ def gate(inner_html, why, audience="provider"):
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request):
     u = acct(current(request)) if current(request) else None
+    fv = C.FEATURED_VIDEO
+    ft, fs, fslug, fq = fv["title"], fv["speaker"], fv["slug"], e(fv["quote"])
     mods = "".join(f"""<div class="card"><div class="kicker">Clinical education</div>
 <h3>{m['title']}</h3><p>{e(m['body'][:150])}…</p></div>""" for m in C.MODULES[:3])
     iore = "".join(f"<li>{e(b)}</li>" for b in C.IORE_BULLETS)
@@ -450,10 +456,29 @@ and clinical support hub.</p>
       "provider")}
 </div></section>
 
+
+<section id="featured"><div class="wrap">
+<div class="kicker" style="color:var(--orange);font-weight:800;letter-spacing:.09em;
+font-size:12px;text-transform:uppercase">Featured</div>
+<h2 style="margin:8px 0 26px">{ft} <span class="t">with {fs}</span></h2>
+<div class="feature">
+<a class="fthumb" href="/videos/{fslug}" aria-label="Play: {ft}">
+<div class="vplay">▶</div>
+<div class="vlock">🔒</div></a>
+<div>
+<p class="fq">{fq}</p>
+<p class="mut" style="font-size:14px;margin:0 0 18px">
+Watch the full video free — tell us whether you are a doctor or a patient and it opens
+full screen.</p>
+<div style="display:flex;gap:12px;flex-wrap:wrap">
+<a class="btn" href="/videos/{fslug}">▶ Play the video</a>
+<a class="btn ghost" href="/videos">Browse the library</a>
+</div></div></div></div></section>
 <div class="joinstrip"><div class="in">
 <h3>Doctors — join the referral network</h3>
 <a class="btn" style="background:#04141a" href="/providers/apply">Doctors Join Now</a>
 </div></div>
+<style>{VIDEO_CSS}</style>
 """, user=u, title=f"{C.BRAND} — {C.TAGLINE}"))
 
 
@@ -1617,3 +1642,146 @@ async def outbound_submit(key: str, request: Request, step: str = ""):
     _notify_new(step, email, g, zip_, lead_id)     # owner + sales email, and Monday
     _record_outbound(uid, key, request)
     return RedirectResponse(url, 303)
+
+
+# ---------- video library ----------
+def _videos_for(role):
+    """Consumers see consumer videos. Providers see everything, because clinical
+    material is written for them and the patient video is what they show patients."""
+    if role == "provider":
+        return list(C.VIDEOS)
+    if role == "consumer":
+        return [v for v in C.VIDEOS if v["audience"] == "consumer"]
+    return []
+
+
+def _tile(v, unlocked):
+    playable = bool(v.get("embed"))
+    badge = next((t for k, t, _, _ in C.VIDEO_CATEGORIES if k == v["category"]), "")
+    lock = "" if unlocked else '<div class="vlock">🔒</div>'
+    href = f'/videos/{v["slug"]}'
+    state = "" if playable else '<div class="soon">Coming soon</div>'
+    return f"""<a class="vtile{'' if playable else ' pending'}" href="{href}">
+<div class="vthumb">{lock}<div class="vplay">▶</div>{state}</div>
+<div class="vmeta"><div class="vcat">{e(badge)}</div>
+<h3>{v['title']}</h3>
+<p>{e(v['desc'][:110])}…</p>
+<div class="vspk">{e(v['speaker'])}</div></div></a>"""
+
+
+VIDEO_CSS = """
+.vgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(288px,1fr));gap:18px}
+.vtile{display:block;text-decoration:none;color:inherit;background:var(--panel);
+border:1px solid var(--line);border-radius:14px;overflow:hidden;transition:border-color .15s,transform .15s}
+.vtile:hover{border-color:var(--teal);transform:translateY(-2px)}
+.vtile.pending{opacity:.62}
+.vthumb{position:relative;aspect-ratio:16/9;
+background:radial-gradient(120% 120% at 30% 20%,#123a44 0%,#08222a 60%,#061a21 100%);
+display:flex;align-items:center;justify-content:center}
+.vplay{width:56px;height:56px;border-radius:50%;background:var(--orange);color:#fff;
+display:flex;align-items:center;justify-content:center;font-size:21px;padding-left:4px;
+box-shadow:0 6px 22px rgba(255,122,26,.35)}
+.vlock{position:absolute;top:11px;right:12px;font-size:15px;opacity:.85}
+.soon{position:absolute;bottom:10px;left:12px;font-size:11px;letter-spacing:.06em;
+text-transform:uppercase;color:var(--mut);font-weight:800}
+.vmeta{padding:16px}
+.vcat{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--teal);
+font-weight:800;margin-bottom:6px}
+.vtile h3{margin:0 0 6px;font-size:16px;letter-spacing:-.015em;line-height:1.3}
+.vtile p{margin:0 0 8px;color:var(--mut);font-size:13.5px}
+.vspk{color:var(--mut);font-size:12.5px;font-weight:700}
+.feature{display:grid;grid-template-columns:1.05fr .95fr;gap:30px;align-items:center}
+@media(max-width:900px){.feature{grid-template-columns:1fr}}
+.fthumb{position:relative;aspect-ratio:16/9;border-radius:16px;overflow:hidden;
+background:radial-gradient(120% 120% at 30% 20%,#134450 0%,#08222a 60%,#061a21 100%);
+display:flex;align-items:center;justify-content:center;border:1px solid var(--line)}
+.fthumb .vplay{width:78px;height:78px;font-size:28px}
+.fq{border-left:3px solid var(--teal);padding:2px 0 2px 16px;color:var(--mut);font-size:15px;
+line-height:1.7;margin:16px 0 22px}
+.player{position:relative;aspect-ratio:16/9;border-radius:14px;overflow:hidden;
+border:1px solid var(--line);background:#000}
+.player iframe{position:absolute;inset:0;width:100%;height:100%;border:0}
+"""
+
+
+@app.get("/videos", response_class=HTMLResponse)
+def videos_index(request: Request):
+    u = acct(current(request)) if current(request) else None
+    role = u["role"] if u else ""
+    role = "provider" if role in ("provider", "owner", "sales") else role
+    unlocked = bool(u)
+    vids = _videos_for(role) if unlocked else C.VIDEOS
+    by_cat = {}
+    for v in vids:
+        by_cat.setdefault(v["category"], []).append(v)
+    blocks = ""
+    for key, title, aud, sub in C.VIDEO_CATEGORIES:
+        items = by_cat.get(key, [])
+        if not items:
+            continue
+        tiles = "".join(_tile(v, unlocked) for v in items)
+        blocks += f"""<h3 style="margin:34px 0 4px;font-size:20px">{e(title)}</h3>
+<p class="mut" style="margin:0 0 14px;font-size:14px">{e(sub)}
+{'· for providers' if aud == 'provider' else '· for patients'}</p>
+<div class="vgrid">{tiles}</div>"""
+    intro = ("Everything below is available on your account."
+             if unlocked else
+             "Every video is behind a free account. Tell us whether you are a doctor or a "
+             "patient and you will see the library written for you.")
+    cta = "" if unlocked else """<div style="display:flex;gap:12px;flex-wrap:wrap;margin:22px 0 8px">
+<a class="btn" href="/signup?as=provider">I'm a doctor or provider</a>
+<a class="btn teal" href="/signup?as=consumer">I'm a consumer or patient</a></div>"""
+    return HTMLResponse(shell(f"""<section style="border-top:0"><div class="wrap">
+<h2>Video <span class="t">library</span></h2>
+<p class="lede">{e(intro)}</p>{cta}
+{blocks}
+</div></section><style>{VIDEO_CSS}</style>""", user=u, title="Video library"))
+
+
+@app.get("/videos/{slug}", response_class=HTMLResponse)
+def video_page(slug: str, request: Request):
+    u = acct(current(request)) if current(request) else None
+    v = next((x for x in C.VIDEOS if x["slug"] == slug), None)
+    if not v:
+        raise HTTPException(404)
+    role = u["role"] if u else ""
+    role = "provider" if role in ("provider", "owner", "sales") else role
+    allowed = bool(u) and v in _videos_for(role)
+
+    if not u:
+        return HTMLResponse(shell(f"""<section style="border-top:0"><div class="wrap">
+<div class="card form" style="max-width:640px;text-align:center">
+<div style="font-size:34px;line-height:1;margin-bottom:6px">🔒</div>
+<h2 style="font-size:25px;margin-bottom:6px">{v['title']}</h2>
+<p class="mut" style="margin:0 0 4px">{e(v['speaker'])}</p>
+<p class="mut" style="margin:0 0 22px;font-size:14.5px">{e(v['desc'][:190])}…</p>
+<p style="font-weight:700;margin:0 0 14px">To watch, tell us which you are</p>
+<div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap">
+<a class="btn" href="/signup?as=provider">I'm a doctor or provider</a>
+<a class="btn teal" href="/signup?as=consumer">I'm a consumer or patient</a></div>
+<p class="mut" style="margin-top:18px;font-size:13px">Already registered?
+<a href="/login">Log in</a></p></div></div></section>
+<style>{VIDEO_CSS}</style>""", title=v["title"]))
+
+    if not allowed:
+        return HTMLResponse(shell(f"""<section style="border-top:0"><div class="wrap">
+<div class="card form" style="max-width:600px;text-align:center">
+<h2 style="font-size:23px">This one is written for clinicians</h2>
+<p class="mut">Your account is registered as a patient. The patient library is
+<a href="/videos">here</a>.</p></div></div></section>""", user=u, title="Not available"))
+
+    player = (f'<div class="player"><iframe src="{e(v["embed"])}" allowfullscreen '
+              f'allow="autoplay; fullscreen; picture-in-picture"></iframe></div>'
+              if v.get("embed") else
+              '<div class="fthumb"><div class="soon" style="position:static;font-size:13px">'
+              'This recording is being added to the library.</div></div>')
+    more = "".join(_tile(x, True) for x in _videos_for(role) if x["slug"] != slug)
+    return HTMLResponse(shell(f"""<section style="border-top:0"><div class="wrap">
+<p class="mut"><a href="/videos">← Video library</a></p>
+<h2 style="margin-bottom:4px">{v['title']}</h2>
+<p class="mut" style="margin:0 0 18px">{e(v['speaker'])}</p>
+{player}
+<p class="lede" style="margin-top:22px;max-width:78ch">{e(v['desc'])}</p>
+<h3 style="margin-top:34px;font-size:19px">More in your library</h3>
+<div class="vgrid">{more}</div>
+</div></section><style>{VIDEO_CSS}</style>""", user=u, title=v["title"]))
