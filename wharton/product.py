@@ -30,13 +30,13 @@ PRODUCT = {
                   "amber-free glass vial with an aluminium seal"),
     "sections": [
         ("Discover the Science",
-         "Through extensive research and development, Wharton Jelly Shelf Stable (WJST) blends "
+         "Through extensive research and development, Wharton Jelly Shelf Stable (WJ-SS) blends "
          "the perfect fusion of science and nature. We start with umbilical cord-derived "
          "exosomes, known for their exceptional potency in Placental, Vascular Endothelial, and "
          "Transforming growth factors. This unique acellular formulation of growth factors, "
          "exclusive to WJ-SS, creates application flexibility unrivaled by other products."),
         ("Convenience Meets Potency",
-         "WJST is a shelf-stable product that requires no refrigeration. Our Lyophilization "
+         "WJ-SS is a shelf-stable product that requires no refrigeration. Our Lyophilization "
          "process dehydrates without denaturing the crucial peptides, proteins, and growth "
          "factors essential for collagen-based healing. This means you can safely apply WJ-SS "
          "based on patient needs."),

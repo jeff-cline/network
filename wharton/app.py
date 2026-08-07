@@ -504,8 +504,8 @@ def home(request: Request):
 
 <section id="product"><div class="wrap">
 <div class="prod">
-<div class="prodimg"><img src="{P.PRODUCT['image']}" alt="{e(P.PRODUCT['image_alt'])}"
- width="640" height="1138" loading="eager"></div>
+<div class="prodimg"><img src="{P.PRODUCT['image']}?v=3" alt="{e(P.PRODUCT['image_alt'])}"
+ width="572" height="1600" loading="eager" decoding="async" fetchpriority="high"></div>
 <div>
 <div class="kicker" style="color:var(--orange);font-weight:800;letter-spacing:.09em;
 font-size:12px;text-transform:uppercase">The formulation</div>
@@ -1812,9 +1812,12 @@ font-weight:800;margin-bottom:6px}
 .prod{display:grid;grid-template-columns:.82fr 1.18fr;gap:40px;align-items:center}
 @media(max-width:900px){.prod{grid-template-columns:1fr}}
 .prodimg{background:radial-gradient(70% 70% at 50% 40%,#12333d 0%,#08222a 60%,#061a21 100%);
-border:1px solid var(--line);border-radius:18px;padding:26px;display:flex;justify-content:center}
-.prodimg img{max-width:100%;height:auto;max-height:460px;object-fit:contain;
-filter:drop-shadow(0 22px 44px rgba(0,0,0,.55))}
+border:1px solid var(--line);border-radius:18px;padding:20px;display:flex;
+align-items:center;justify-content:center;min-height:640px}
+.prodimg img{max-width:100%;height:auto;max-height:690px;object-fit:contain;
+background:#fff;border-radius:12px;padding:14px;
+filter:drop-shadow(0 26px 52px rgba(0,0,0,.6))}
+@media(max-width:900px){.prodimg{min-height:0}.prodimg img{max-height:520px}}
 .ph{margin:18px 0 5px;font-size:17px;letter-spacing:-.01em;color:var(--teal)}
 .pp{color:var(--mut);margin:0;font-size:15.5px;line-height:1.75;max-width:70ch}
 .two-col{display:grid;grid-template-columns:1fr 1fr;gap:28px}
