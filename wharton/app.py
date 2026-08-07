@@ -337,22 +337,21 @@ padding:13px 26px;border-radius:10px;font-size:15.5px;border:0;cursor:pointer;le
 .hero video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
 .hero .scrim{position:absolute;inset:0;
 background:linear-gradient(100deg,rgba(4,20,26,.94) 0%,rgba(4,20,26,.78) 45%,rgba(4,20,26,.45) 100%)}
-.hero .in{position:relative;max-width:1180px;margin:0 auto;padding:0 24px 52px;width:100%;
-display:grid;grid-template-columns:1.35fr .65fr;gap:34px;align-items:end}
-@media(max-width:900px){.hero .in{grid-template-columns:1fr;padding-bottom:38px}}
+.hero .in{position:relative;max-width:1180px;margin:0 auto;padding:0 24px 28px;width:100%;
+display:grid;grid-template-columns:1fr auto;gap:30px;align-items:end}
+@media(max-width:900px){.hero .in{grid-template-columns:1fr;padding-bottom:26px;gap:18px}}
 h1.hero-h1{margin:0 0 14px;font-size:clamp(44px,8.5vw,92px);line-height:.95;letter-spacing:-.045em;
 font-weight:900}
 h1.hero-h1 .t{color:var(--teal)}
 h1.hero-h1 .o{color:var(--orange)}
 .hero p.lead{font-size:clamp(17px,2.4vw,23px);color:#dbeef1;max-width:44ch;margin:0 0 10px;font-weight:600}
 .hero p.sub{font-size:clamp(15px,1.9vw,18px);color:var(--mut);max-width:52ch;margin:0 0 30px}
-.hero .cta{display:flex;flex-direction:column;gap:12px;align-items:stretch;justify-self:end;
-width:100%;max-width:330px}
-@media(max-width:900px){.hero .cta{max-width:none;justify-self:stretch;
-flex-direction:row;flex-wrap:wrap}}
+.hero .cta{display:flex;flex-direction:row;gap:12px;align-items:center;justify-self:end;
+flex-wrap:wrap;padding-bottom:4px}
+@media(max-width:900px){.hero .cta{justify-self:stretch}}
 .hero .cta .btn{display:flex;align-items:center;gap:11px;justify-content:flex-start;
 text-align:left;line-height:1.25}
-@media(max-width:900px){.hero .cta .btn{flex:1 1 240px}}
+@media(max-width:900px){.hero .cta .btn{flex:1 1 220px;justify-content:center}}
 .btn svg{flex:0 0 22px;width:22px;height:22px}
 .hero .scrim{background:linear-gradient(180deg,rgba(4,20,26,.30) 0%,rgba(4,20,26,.55) 42%,
 rgba(4,20,26,.93) 100%)}
