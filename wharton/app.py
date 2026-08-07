@@ -337,17 +337,21 @@ padding:13px 26px;border-radius:10px;font-size:15.5px;border:0;cursor:pointer;le
 .hero video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
 .hero .scrim{position:absolute;inset:0;
 background:linear-gradient(100deg,rgba(4,20,26,.94) 0%,rgba(4,20,26,.78) 45%,rgba(4,20,26,.45) 100%)}
-.hero .in{position:relative;max-width:1180px;margin:0 auto;padding:0 24px 28px;width:100%;
-display:grid;grid-template-columns:1fr auto;gap:30px;align-items:end}
+.hero .in{position:relative;max-width:1180px;margin:0 auto;padding:0 24px 30px;width:100%;
+display:grid;grid-template-columns:1fr auto;gap:30px;align-items:center}
 @media(max-width:900px){.hero .in{grid-template-columns:1fr;padding-bottom:26px;gap:18px}}
-h1.hero-h1{margin:0 0 14px;font-size:clamp(44px,8.5vw,92px);line-height:.95;letter-spacing:-.045em;
+h1.hero-h1{margin:0;font-size:clamp(38px,5.4vw,68px);line-height:1;letter-spacing:-.04em;
+white-space:nowrap;
 font-weight:900}
 h1.hero-h1 .t{color:var(--teal)}
 h1.hero-h1 .o{color:var(--orange)}
-.hero p.lead{font-size:clamp(17px,2.4vw,23px);color:#dbeef1;max-width:44ch;margin:0 0 10px;font-weight:600}
-.hero p.sub{font-size:clamp(15px,1.9vw,18px);color:var(--mut);max-width:52ch;margin:0 0 30px}
+.heroband{border-bottom:1px solid var(--line);padding:34px 0 30px}
+.heroband h2{margin:0 0 8px;font-size:clamp(24px,3.4vw,38px);line-height:1.15;
+letter-spacing:-.02em;color:#eaf7f9}
+.heroband h3{margin:0;font-size:clamp(16px,2vw,21px);line-height:1.4;font-weight:600;
+color:var(--mut)}
 .hero .cta{display:flex;flex-direction:row;gap:12px;align-items:center;justify-self:end;
-flex-wrap:wrap;padding-bottom:4px}
+flex-wrap:wrap}
 @media(max-width:900px){.hero .cta{justify-self:stretch}}
 .hero .cta .btn{display:flex;align-items:center;gap:11px;justify-content:flex-start;
 text-align:left;line-height:1.25}
@@ -543,15 +547,16 @@ def home(request: Request):
  poster="/static/img/wj-ss-vial.png"><source src="/static/video/hero-v3.mp4" type="video/mp4"></video>
 <div class="scrim"></div>
 <div class="in">
-<div>
 <h1 class="hero-h1"><span class="t">Wharton</span> <span class="o">Jelly</span></h1>
-<p class="lead">{e(C.TAGLINE)}</p>
-<p class="sub">{e(C.SUBLINE)}</p>
-</div>
 <div class="cta">
 <a class="btn lg" href="/providers">{ICON_DOCTOR}<span>For doctors &amp; providers</span></a>
 <a class="btn lg" href="/patients">{ICON_PEOPLE}<span>For consumers &amp; patients</span></a>
 </div></div></div>
+
+<section class="heroband"><div class="wrap">
+<h2>{e(C.TAGLINE)}</h2>
+<h3>{e(C.SUBLINE)}</h3>
+</div></section>
 
 
 <section id="product"><div class="wrap">
