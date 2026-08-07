@@ -385,6 +385,18 @@ footer a:hover{color:var(--teal)}
 .joinstrip .in{max-width:1180px;margin:0 auto;padding:0 24px;display:flex;gap:20px;
 align-items:center;flex-wrap:wrap}
 .joinstrip h3{margin:0;font-size:26px;color:#04141a;letter-spacing:-.02em;font-weight:900;flex:1}
+.machine{border-top:1px solid var(--line);margin-top:14px;padding-top:14px;display:flex;
+gap:14px;flex-wrap:wrap;align-items:center}
+.machine span{color:var(--mut);font-size:10.5px;text-transform:uppercase;letter-spacing:.09em;
+font-weight:800}
+.machine a{display:inline;color:var(--mut);font-size:11.5px;padding:0;
+font-family:ui-monospace,SFMono-Regular,Menlo,monospace;text-decoration:none;
+border-bottom:1px dotted var(--line)}
+.machine a:hover{color:var(--teal);border-bottom-color:var(--teal)}
+.rocket{position:fixed;right:19px;bottom:19px;z-index:70;width:52px;height:52px;border-radius:50%;
+background:var(--orange);display:flex;align-items:center;justify-content:center;font-size:25px;
+text-decoration:none;box-shadow:0 5px 20px rgba(0,0,0,.35);transition:transform .15s}
+.rocket:hover{transform:translateY(-2px);background:var(--orange-d)}
 """
 
 
@@ -446,7 +458,18 @@ def shell(body, user=None, title="Wharton Jelly", nav=True, desc=None,
 color:var(--mut);font-size:12.5px">
 Education, protocols and validation are provided through the {e(C.IORE_NAME)}, an independent
 third party. &copy; {time.strftime('%Y')} Wharton Jelly.
-</div></div></footer></body></html>"""
+</div>
+<div class="machine">
+<span>Machine-readable</span>
+<a href="/sitemap.xml">sitemap.xml</a>
+<a href="/answers.xml">answers.xml</a>
+<a href="/llms.txt">llms.txt</a>
+<a href="/robots.txt">robots.txt</a>
+<a href="/schema.json">schema.json</a>
+</div></div></footer>
+<a class="rocket" href="https://r0cketship.com" target="_blank" rel="noopener"
+ aria-label="Built by R0cketShip" title="Built by R0cketShip">&#128640;</a>
+</body></html>"""
 
 
 def img(slot, alt, cls=""):
@@ -2042,3 +2065,17 @@ def llms_txt():
               f"- {C.IORE_NAME} ({C.IORE_URL}) — independent third party",
               "", "## Answer feed", "- https://whartonjelly.com/answers.xml"]
     return Response("\n".join(lines), media_type="text/plain")
+
+
+@app.get("/schema.json")
+def schema_json():
+    """One document containing every structured-data block the site publishes,
+    so the markup can be inspected or validated without crawling each page."""
+    return JSONResponse({
+        "organization": ORG_LD,
+        "product": json.loads(product_ld()),
+        "faq": json.loads(faq_ld(list(C.FAQ) + list(P.SOURCING))),
+        "sitemaps": ["https://whartonjelly.com/sitemap.xml",
+                     "https://whartonjelly.com/answers.xml"],
+        "llms": "https://whartonjelly.com/llms.txt",
+    })
