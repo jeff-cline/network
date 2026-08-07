@@ -243,6 +243,23 @@ with closing(db()) as _c:
 
 
 
+
+# Inline SVG so the icons inherit colour and need no extra request. Stethoscope
+# for clinicians, a group mark for patients.
+ICON_DOCTOR = ('<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+               'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+               '<path d="M4.8 2.3A.3.3 0 1 0 5 2H4a2 2 0 0 0-2 2v5a6 6 0 0 0 6 6 6 6 0 0 0 6-6V4'
+               'a2 2 0 0 0-2-2h-1a.2.2 0 1 0 .2.3"/>'
+               '<path d="M8 15v1a6 6 0 0 0 6 6 6 6 0 0 0 6-6v-4"/>'
+               '<circle cx="20" cy="10" r="2"/></svg>')
+ICON_PEOPLE = ('<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+               'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+               '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/>'
+               '<circle cx="9" cy="7" r="4"/>'
+               '<path d="M22 21v-2a4 4 0 0 0-3-3.87"/>'
+               '<path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>')
+
+
 # ---------- structured data ----------
 ORG_LD = {
     "@context": "https://schema.org",
@@ -316,18 +333,29 @@ padding:13px 26px;border-radius:10px;font-size:15.5px;border:0;cursor:pointer;le
 .btn.sm{padding:8px 15px;font-size:13.5px}
 .btn.lg{padding:17px 34px;font-size:17px}
 /* hero */
-.hero{position:relative;min-height:min(78vh,660px);display:flex;align-items:center;overflow:hidden}
+.hero{position:relative;min-height:min(78vh,660px);display:flex;align-items:flex-end;overflow:hidden}
 .hero video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
 .hero .scrim{position:absolute;inset:0;
 background:linear-gradient(100deg,rgba(4,20,26,.94) 0%,rgba(4,20,26,.78) 45%,rgba(4,20,26,.45) 100%)}
-.hero .in{position:relative;max-width:1180px;margin:0 auto;padding:70px 24px;width:100%}
+.hero .in{position:relative;max-width:1180px;margin:0 auto;padding:0 24px 52px;width:100%;
+display:grid;grid-template-columns:1.35fr .65fr;gap:34px;align-items:end}
+@media(max-width:900px){.hero .in{grid-template-columns:1fr;padding-bottom:38px}}
 h1.hero-h1{margin:0 0 14px;font-size:clamp(44px,8.5vw,92px);line-height:.95;letter-spacing:-.045em;
 font-weight:900}
 h1.hero-h1 .t{color:var(--teal)}
 h1.hero-h1 .o{color:var(--orange)}
 .hero p.lead{font-size:clamp(17px,2.4vw,23px);color:#dbeef1;max-width:44ch;margin:0 0 10px;font-weight:600}
 .hero p.sub{font-size:clamp(15px,1.9vw,18px);color:var(--mut);max-width:52ch;margin:0 0 30px}
-.hero .cta{display:flex;gap:14px;flex-wrap:wrap}
+.hero .cta{display:flex;flex-direction:column;gap:12px;align-items:stretch;justify-self:end;
+width:100%;max-width:330px}
+@media(max-width:900px){.hero .cta{max-width:none;justify-self:stretch;
+flex-direction:row;flex-wrap:wrap}}
+.hero .cta .btn{display:flex;align-items:center;gap:11px;justify-content:flex-start;
+text-align:left;line-height:1.25}
+@media(max-width:900px){.hero .cta .btn{flex:1 1 240px}}
+.btn svg{flex:0 0 22px;width:22px;height:22px}
+.hero .scrim{background:linear-gradient(180deg,rgba(4,20,26,.30) 0%,rgba(4,20,26,.55) 42%,
+rgba(4,20,26,.93) 100%)}
 /* sections */
 section{padding:64px 0;border-top:1px solid var(--line)}
 h2{font-size:clamp(26px,3.8vw,40px);letter-spacing:-.03em;margin:0 0 12px;font-weight:800}
@@ -516,12 +544,14 @@ def home(request: Request):
  poster="/static/img/wj-ss-vial.png"><source src="/static/video/hero-v3.mp4" type="video/mp4"></video>
 <div class="scrim"></div>
 <div class="in">
+<div>
 <h1 class="hero-h1"><span class="t">Wharton</span> <span class="o">Jelly</span></h1>
 <p class="lead">{e(C.TAGLINE)}</p>
 <p class="sub">{e(C.SUBLINE)}</p>
+</div>
 <div class="cta">
-<a class="btn lg" href="/providers">For doctors &amp; providers</a>
-<a class="btn lg" href="/patients">For consumers &amp; patients</a>
+<a class="btn lg" href="/providers">{ICON_DOCTOR}<span>For doctors &amp; providers</span></a>
+<a class="btn lg" href="/patients">{ICON_PEOPLE}<span>For consumers &amp; patients</span></a>
 </div></div></div>
 
 
