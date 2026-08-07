@@ -21,6 +21,7 @@ from starlette.middleware.sessions import SessionMiddleware
 BASE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE)
 import content as C
+import product as P
 
 DB = os.path.join(BASE, "wharton.db")
 SECRET_FILE = os.path.join(BASE, ".session_secret")
@@ -241,6 +242,54 @@ with closing(db()) as _c:
         _c.commit()
 
 
+
+# ---------- structured data ----------
+ORG_LD = {
+    "@context": "https://schema.org",
+    "@graph": [
+        {"@type": "Organization", "@id": "https://whartonjelly.com/#org",
+         "name": "Wharton Jelly", "url": "https://whartonjelly.com/",
+         "description": C.TAGLINE,
+         "logo": "https://whartonjelly.com/static/img/wj-ss-vial.png"},
+        {"@type": "WebSite", "@id": "https://whartonjelly.com/#site",
+         "url": "https://whartonjelly.com/", "name": "Wharton Jelly",
+         "publisher": {"@id": "https://whartonjelly.com/#org"},
+         "inLanguage": "en-US"},
+    ],
+}
+
+
+def faq_ld(pairs):
+    """FAQPage markup is what answer engines lift directly, so every Q&A on the
+    site is emitted as structured data as well as prose."""
+    return json.dumps({
+        "@context": "https://schema.org", "@type": "FAQPage",
+        "mainEntity": [{"@type": "Question", "name": q,
+                        "acceptedAnswer": {"@type": "Answer", "text": a}}
+                       for q, a in pairs]})
+
+
+def product_ld():
+    return json.dumps({
+        "@context": "https://schema.org", "@type": "Product",
+        "name": P.PRODUCT["name"], "alternateName": P.PRODUCT["h2"],
+        "image": "https://whartonjelly.com" + P.PRODUCT["image"],
+        "description": P.PRODUCT["sections"][0][1],
+        "brand": {"@type": "Brand", "name": "Wharton Jelly"},
+        "audience": {"@type": "MedicalAudience", "audienceType": "Clinician"},
+        "disclaimer": P.LEGAL})
+
+
+def article_ld(headline, body, url):
+    return json.dumps({
+        "@context": "https://schema.org", "@type": "MedicalWebPage",
+        "headline": headline, "url": "https://whartonjelly.com" + url,
+        "description": body[:200],
+        "publisher": {"@id": "https://whartonjelly.com/#org"},
+        "inLanguage": "en-US",
+        "reviewedBy": {"@type": "Organization", "name": C.IORE_NAME}})
+
+
 # ---------- chrome ----------
 CSS = """
 :root{--bg:#04141a;--panel:#0c2129;--line:#17323d;--tx:#e9f4f6;--mut:#8fadb6;
@@ -339,7 +388,10 @@ align-items:center;flex-wrap:wrap}
 """
 
 
-def shell(body, user=None, title="Wharton Jelly", nav=True):
+def shell(body, user=None, title="Wharton Jelly", nav=True, desc=None,
+          canon="/", ld=None):
+    desc = desc or f"{C.TAGLINE} {C.SUBLINE}"
+    ld = ld or json.dumps(ORG_LD)
     connect_links = "".join(f'<a href="/connect/{sl}">{e(t)}</a>' for sl, t, _, _ in C.CONNECT)
     links = ""
     right = ('<a class="btn ghost sm" href="/login">Log in</a>'
@@ -355,14 +407,28 @@ def shell(body, user=None, title="Wharton Jelly", nav=True):
 <nav class="links">{links}</nav>{right}</div></header>""" if nav else ""
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>{e(title)}</title>
-<meta name="description" content="{e(C.TAGLINE)} {e(C.SUBLINE)}">
+<meta name="description" content="{e(desc)}">
+<link rel="canonical" href="https://whartonjelly.com{e(canon)}">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Wharton Jelly">
+<meta property="og:title" content="{e(title)}">
+<meta property="og:description" content="{e(desc)}">
+<meta property="og:url" content="https://whartonjelly.com{e(canon)}">
+<meta property="og:image" content="https://whartonjelly.com{P.PRODUCT['image']}">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="robots" content="index,follow,max-snippet:-1,max-image-preview:large">
+<script type="application/ld+json">{ld}</script>
 <style>{CSS}</style></head><body>{header}{body}
-<div class="compliance"><div class="in"><b>Important:</b> {e(C.COMPLIANCE)}</div></div>
+<div class="compliance"><div class="in">
+<p style="margin:0 0 10px"><b>Important:</b> {e(C.COMPLIANCE)}</p>
+<p style="margin:0">{e(P.LEGAL)}</p></div></div>
 <footer><div class="in"><div class="fgrid">
 <div><h4>Wharton Jelly</h4>
 <a href="/providers">For doctors &amp; providers</a>
 <a href="/patients">For consumers &amp; patients</a>
 <a href="/science">The science</a>
+<a href="/sourcing">Sourcing &amp; quality</a>
+<a href="/research">Research</a>
 <a href="/education">Education &amp; support</a></div>
 <div><h4>Providers</h4>
 <a href="/providers/apply">Join the provider program</a>
@@ -410,13 +476,21 @@ def home(request: Request):
     u = acct(current(request)) if current(request) else None
     fv = C.FEATURED_VIDEO
     ft, fs, fslug, fq = fv["title"], fv["speaker"], fv["slug"], e(fv["quote"])
+    prodsecs = "".join(f'<h4 class="ph">{e(t)}</h4><p class="pp">{e(b)}</p>'
+                       for t, b in P.PRODUCT["sections"])
+    whyparas = "".join(f'<p class="pp">{e(x)}</p>' for x in P.WHY["paras"])
+    connparas = "".join(f'<div><p class="pp">{e(x)}</p></div>' for x in P.CONNECTIVE["paras"])
+    home_ld = json.dumps({"@context": "https://schema.org", "@graph": [
+        ORG_LD["@graph"][0], ORG_LD["@graph"][1],
+        json.loads(product_ld()),
+        json.loads(faq_ld([(q, a) for q, a in C.FAQ]))]})
     mods = "".join(f"""<div class="card"><div class="kicker">Clinical education</div>
 <h3>{m['title']}</h3><p>{e(m['body'][:150])}…</p></div>""" for m in C.MODULES[:3])
     iore = "".join(f"<li>{e(b)}</li>" for b in C.IORE_BULLETS)
     return HTMLResponse(shell(f"""
 <div class="hero">
 <video autoplay muted loop playsinline preload="metadata"
- poster="/static/img/hero-poster.jpg"><source src="/static/video/hero.mp4" type="video/mp4"></video>
+ poster="/static/img/wj-ss-vial.png"><source src="/static/video/hero-product.mp4" type="video/mp4"></video>
 <div class="scrim"></div>
 <div class="in">
 <h1 class="hero-h1"><span class="t">Wharton</span> <span class="o">Jelly</span></h1>
@@ -427,6 +501,42 @@ def home(request: Request):
 <a class="btn lg" href="/patients">For consumers &amp; patients</a>
 </div></div></div>
 
+
+<section id="product"><div class="wrap">
+<div class="prod">
+<div class="prodimg"><img src="{P.PRODUCT['image']}" alt="{e(P.PRODUCT['image_alt'])}"
+ width="640" height="1138" loading="eager"></div>
+<div>
+<div class="kicker" style="color:var(--orange);font-weight:800;letter-spacing:.09em;
+font-size:12px;text-transform:uppercase">The formulation</div>
+<h2 style="margin:8px 0 4px">{e(P.PRODUCT['h2'])}</h2>
+<h3 style="margin:0 0 22px;font-size:21px;color:var(--teal);font-weight:800">
+{e(P.PRODUCT['h3'])}</h3>
+{prodsecs}
+<div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:24px">
+<a class="btn" href="/providers/apply">Provider access</a>
+<a class="btn ghost" href="/sourcing">How it is sourced</a>
+</div></div></div></div></section>
+
+<section id="why"><div class="wrap">
+<div class="two-col">
+<div><h2>{e(P.WHY['title'])}</h2>{whyparas}</div>
+<div class="factbox">
+<h3 style="margin-top:0;font-size:17px">At a glance</h3>
+<ul class="facts">
+<li>Highest concentration of mesenchymal stem cells per millilitre of the extracellular-matrix-rich tissues</li>
+<li>Collagen types I, III and V, elastin and fibronectin</li>
+<li>A natural source of long-chain hyaluronic acid</li>
+<li>Considered “immune privileged”</li>
+</ul></div></div></div></section>
+
+<section id="connective"><div class="wrap">
+<div class="kicker" style="color:var(--orange);font-weight:800;letter-spacing:.09em;
+font-size:12px;text-transform:uppercase">For clinicians</div>
+<h2 style="margin:8px 0 14px">{e(P.CONNECTIVE['title'])}</h2>
+<div class="two-col">{connparas}</div>
+<p style="margin-top:20px"><a class="btn ghost" href="/science">The science in depth →</a></p>
+</div></section>
 <section><div class="wrap">
 <h2>Two paths. <span class="t">Pick yours.</span></h2>
 <p class="lede">Clinicians integrating biologics into practice need protocols, training and
@@ -479,7 +589,9 @@ full screen.</p>
 <a class="btn" style="background:#04141a" href="/providers/apply">Doctors Join Now</a>
 </div></div>
 <style>{VIDEO_CSS}</style>
-""", user=u, title=f"{C.BRAND} — {C.TAGLINE}"))
+""", user=u, title=f"{C.BRAND} — {C.TAGLINE}",
+        desc=f"{C.TAGLINE} {C.SUBLINE} {P.PRODUCT['h2']}, {P.PRODUCT['h3']}.",
+        canon="/", ld=home_ld))
 
 
 @app.get("/providers", response_class=HTMLResponse)
@@ -1343,13 +1455,19 @@ font-size:12px;text-transform:uppercase">
 @app.get("/faq", response_class=HTMLResponse)
 def faq_page(request: Request):
     u = acct(current(request)) if current(request) else None
-    items = "".join(f'<div class="card" style="margin-bottom:12px"><h3>{e(q)}</h3>'
-                    f'<p>{e(a)}</p></div>' for q, a in C.FAQ)
+    pairs = list(C.FAQ) + list(P.SOURCING)
+    items = "".join(f'<div class="card" style="margin-bottom:12px">'
+                    f'<h3 itemprop="name">{e(q)}</h3>'
+                    f'<p itemprop="text">{e(a)}</p></div>' for q, a in pairs)
     return HTMLResponse(shell(f"""<section style="border-top:0"><div class="wrap">
 <h2>Common <span class="t">questions</span></h2>
-<p class="lede">Answers drawn from our clinical and patient education material.</p>
-<div style="max-width:820px">{items}</div>
-</div></section>""", user=u, title="Questions"))
+<p class="lede">Answers drawn from our clinical, patient and sourcing material.</p>
+<div style="max-width:860px" itemscope itemtype="https://schema.org/FAQPage">{items}</div>
+<p style="margin-top:26px"><a class="btn ghost" href="/sourcing">Full sourcing process →</a></p>
+</div></section>""", user=u, title="Common questions — Wharton Jelly",
+        desc="Answers on Wharton's Jelly: what it is, how it is screened, processed, tested and "
+             "distributed, and how providers should describe it to patients.",
+        canon="/faq", ld=faq_ld(pairs)))
 
 
 # ---------- footer enquiry desks ----------
@@ -1691,6 +1809,23 @@ font-weight:800;margin-bottom:6px}
 .vtile p{margin:0 0 8px;color:var(--mut);font-size:13.5px}
 .vspk{color:var(--mut);font-size:12.5px;font-weight:700}
 .feature{display:grid;grid-template-columns:1.05fr .95fr;gap:30px;align-items:center}
+.prod{display:grid;grid-template-columns:.82fr 1.18fr;gap:40px;align-items:center}
+@media(max-width:900px){.prod{grid-template-columns:1fr}}
+.prodimg{background:radial-gradient(70% 70% at 50% 40%,#12333d 0%,#08222a 60%,#061a21 100%);
+border:1px solid var(--line);border-radius:18px;padding:26px;display:flex;justify-content:center}
+.prodimg img{max-width:100%;height:auto;max-height:460px;object-fit:contain;
+filter:drop-shadow(0 22px 44px rgba(0,0,0,.55))}
+.ph{margin:18px 0 5px;font-size:17px;letter-spacing:-.01em;color:var(--teal)}
+.pp{color:var(--mut);margin:0;font-size:15.5px;line-height:1.75;max-width:70ch}
+.two-col{display:grid;grid-template-columns:1fr 1fr;gap:28px}
+@media(max-width:820px){.two-col{grid-template-columns:1fr}}
+.factbox{background:var(--panel);border:1px solid var(--teal);border-radius:15px;padding:22px;
+align-self:start}
+.facts{list-style:none;padding:0;margin:0}
+.facts li{padding:8px 0 8px 24px;position:relative;color:var(--mut);font-size:14.5px;
+border-bottom:1px solid var(--line)}
+.facts li:last-child{border-bottom:0}
+.facts li:before{content:"◆";position:absolute;left:0;color:var(--teal);font-size:11px;top:11px}
 @media(max-width:900px){.feature{grid-template-columns:1fr}}
 .fthumb{position:relative;aspect-ratio:16/9;border-radius:16px;overflow:hidden;
 background:radial-gradient(120% 120% at 30% 20%,#134450 0%,#08222a 60%,#061a21 100%);
@@ -1785,3 +1920,122 @@ def video_page(slug: str, request: Request):
 <h3 style="margin-top:34px;font-size:19px">More in your library</h3>
 <div class="vgrid">{more}</div>
 </div></section><style>{VIDEO_CSS}</style>""", user=u, title=v["title"]))
+
+
+# ---------- sourcing, research, richer FAQ ----------
+@app.get("/sourcing", response_class=HTMLResponse)
+def sourcing_page(request: Request):
+    u = acct(current(request)) if current(request) else None
+    cards = "".join(f'<div class="card"><div class="kicker">Step</div><h3>{e(t)}</h3>'
+                    f'<p>{e(b)}</p></div>' for t, b in P.SOURCING)
+    steps = "".join(f'<li>{e(x)}</li>' for x in P.SOURCING_STEPS)
+    return HTMLResponse(shell(f"""<section style="border-top:0"><div class="wrap">
+<div class="kicker" style="color:var(--orange);font-weight:800;letter-spacing:.09em;
+font-size:12px;text-transform:uppercase">Sourcing &amp; quality</div>
+<h2 style="margin:8px 0 14px">Product <span class="t">sourcing process</span></h2>
+<p class="lede">{e(P.SOURCING_INTRO)}</p>
+<div class="grid">{cards}</div>
+<h3 style="margin:38px 0 12px;font-size:21px">From donation to delivery</h3>
+<ol class="steps">{steps}</ol>
+</div></section>
+<style>.steps{{counter-reset:s;list-style:none;padding:0;margin:0;max-width:900px}}
+.steps li{{counter-increment:s;position:relative;padding:14px 0 14px 52px;
+border-bottom:1px solid var(--line);color:var(--mut);font-size:15px;line-height:1.7}}
+.steps li:last-child{{border-bottom:0}}
+.steps li:before{{content:counter(s);position:absolute;left:0;top:12px;width:32px;height:32px;
+border-radius:50%;background:var(--panel);border:1px solid var(--teal);color:var(--teal);
+display:flex;align-items:center;justify-content:center;font-weight:800;font-size:13px}}</style>""",
+        user=u, title="Product sourcing process — Wharton Jelly",
+        desc=("How Wharton's Jelly is donated, screened, processed in a cGMP facility and "
+              "distributed. Prescreening, processing, distribution and lot testing explained."),
+        canon="/sourcing",
+        ld=faq_ld([(t, b) for t, b in P.SOURCING])))
+
+
+@app.get("/research", response_class=HTMLResponse)
+def research_page(request: Request):
+    u = acct(current(request)) if current(request) else None
+    paras = "".join(f'<p class="pp" style="margin-bottom:16px">{e(x)}</p>' for x in P.RESEARCH)
+    return HTMLResponse(shell(f"""<section style="border-top:0"><div class="wrap">
+<h2>Research</h2>
+<div style="max-width:78ch">{paras}</div>
+{gate('<div class="grid"><div class="card"><h3>Peer-reviewed collection</h3>'
+      '<p>Curated publications from our scientific officers and medical board.</p></div>'
+      '<div class="card"><h3>Protocols</h3><p>Recommended protocols and evolving best '
+      'practices.</p></div></div>',
+      "The publication library is available to registered providers.", "provider")}
+</div></section>""", user=u, title="Research — Wharton Jelly",
+        desc="A curated collection of published peer-reviewed studies in regenerative medicine.",
+        canon="/research",
+        ld=article_ld("Research", P.RESEARCH[0], "/research")))
+
+
+# ---------- SEO / AEO surfaces ----------
+PUBLIC_URLS = [
+    ("/", "1.0", "weekly"), ("/providers", "0.9", "weekly"), ("/patients", "0.9", "weekly"),
+    ("/science", "0.8", "monthly"), ("/sourcing", "0.8", "monthly"),
+    ("/research", "0.7", "monthly"), ("/education", "0.7", "monthly"),
+    ("/videos", "0.8", "weekly"), ("/modules", "0.7", "monthly"), ("/faq", "0.8", "monthly"),
+]
+
+
+@app.get("/sitemap.xml")
+def sitemap():
+    urls = list(PUBLIC_URLS)
+    urls += [(f"/modules/{m['slug']}", "0.6", "monthly") for m in C.MODULES]
+    urls += [(f"/videos/{v['slug']}", "0.6", "monthly") for v in C.VIDEOS]
+    urls += [(f"/connect/{s}", "0.5", "yearly") for s, _, _, _ in C.CONNECT]
+    body = "".join(
+        f"<url><loc>https://whartonjelly.com{u}</loc>"
+        f"<changefreq>{cf}</changefreq><priority>{pr}</priority></url>"
+        for u, pr, cf in urls)
+    return Response(f'<?xml version="1.0" encoding="UTF-8"?>'
+                    f'<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">{body}</urlset>',
+                    media_type="application/xml")
+
+
+@app.get("/robots.txt")
+def robots():
+    return Response(
+        "User-agent: *\nAllow: /\n"
+        "Disallow: /crm\nDisallow: /admin\nDisallow: /portal\nDisallow: /invite\n\n"
+        "# Answer engines\nUser-agent: GPTBot\nAllow: /\n"
+        "User-agent: PerplexityBot\nAllow: /\n"
+        "User-agent: ClaudeBot\nAllow: /\n"
+        "User-agent: Google-Extended\nAllow: /\n\n"
+        "Sitemap: https://whartonjelly.com/sitemap.xml\n"
+        "Sitemap: https://whartonjelly.com/answers.xml\n",
+        media_type="text/plain")
+
+
+@app.get("/answers.xml")
+def answers_xml():
+    """An answer-engine feed: every question the site answers, with its answer and
+    the page it lives on, so a retrieval system can lift a citable passage."""
+    qa = [(q, a, "/faq") for q, a in C.FAQ]
+    qa += [(t, b, "/sourcing") for t, b in P.SOURCING]
+    qa += [(P.WHY["title"], " ".join(P.WHY["paras"]), "/")]
+    qa += [(P.CONNECTIVE["title"], " ".join(P.CONNECTIVE["paras"]), "/")]
+    qa += [(t, b, "/") for t, b in P.PRODUCT["sections"]]
+    qa += [(m["title"], m["body"], f"/modules/{m['slug']}") for m in C.MODULES]
+    items = "".join(
+        f"<answer><question>{e(q)}</question><text>{e(a)}</text>"
+        f"<url>https://whartonjelly.com{u}</url></answer>" for q, a, u in qa)
+    return Response(f'<?xml version="1.0" encoding="UTF-8"?><answers site="whartonjelly.com" '
+                    f'count="{len(qa)}">{items}</answers>', media_type="application/xml")
+
+
+@app.get("/llms.txt")
+def llms_txt():
+    """The emerging convention for telling a language model what a site is and
+    which pages are worth citing."""
+    lines = [f"# {C.BRAND}", "", f"> {C.TAGLINE} {C.SUBLINE}", "",
+             f"{P.PRODUCT['h2']} — {P.PRODUCT['h3']}.", "",
+             "## Compliance", P.COMPLIANCE if hasattr(P, "COMPLIANCE") else C.COMPLIANCE,
+             "", P.LEGAL, "", "## Pages"]
+    for u, _, _ in PUBLIC_URLS:
+        lines.append(f"- https://whartonjelly.com{u}")
+    lines += ["", "## Education partner",
+              f"- {C.IORE_NAME} ({C.IORE_URL}) — independent third party",
+              "", "## Answer feed", "- https://whartonjelly.com/answers.xml"]
+    return Response("\n".join(lines), media_type="text/plain")
