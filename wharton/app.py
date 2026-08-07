@@ -9,7 +9,7 @@ routed by ZIP to a network provider; providers can hold a ZIP exclusively.
 The manufacturer is never named anywhere in output. IORE is cited as the
 education hub, which is how the supplied material describes it.
 """
-import hashlib, hmac, html, json, os, re, secrets, sqlite3, sys, time
+import contextvars, hashlib, hmac, html, json, os, re, secrets, sqlite3, sys, time
 from contextlib import closing
 from http import HTTPStatus
 
@@ -260,20 +260,66 @@ ICON_PEOPLE = ('<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strok
                '<path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>')
 
 
-# ---------- structured data ----------
-ORG_LD = {
-    "@context": "https://schema.org",
-    "@graph": [
-        {"@type": "Organization", "@id": "https://whartonjelly.com/#org",
-         "name": "Wharton Jelly", "url": "https://whartonjelly.com/",
-         "description": C.TAGLINE,
-         "logo": "https://whartonjelly.com/static/img/wj-ss-vial.png"},
-        {"@type": "WebSite", "@id": "https://whartonjelly.com/#site",
-         "url": "https://whartonjelly.com/", "name": "Wharton Jelly",
-         "publisher": {"@id": "https://whartonjelly.com/#org"},
-         "inLanguage": "en-US"},
-    ],
+# ---------- brands ----------
+# One app, one database, one CRM. The marketing skin is chosen by Host header,
+# so a second domain is a front door onto the same funnel, not a second system.
+# Everything operational (CRM links, invite emails, Monday, webhooks) stays
+# pinned to HOME so staff always land on the canonical back office.
+HOME = "whartonjelly.com"
+
+BRANDS = {
+    "whartonjelly.com": {
+        "domain": "whartonjelly.com",
+        "name": "Wharton Jelly",
+        "mark": '<span class="t">Wharton</span> <span class="o">Jelly</span>',
+    },
+    "iexosomes.com": {
+        "domain": "iexosomes.com",
+        "name": "iEXOSOMES",
+        "mark": '<span class="t">i</span><span class="o">EXOSOMES</span>',
+    },
 }
+DEFAULT_BRAND = BRANDS[HOME]
+_brand_ctx = contextvars.ContextVar("brand", default=DEFAULT_BRAND)
+
+
+def brand():
+    return _brand_ctx.get()
+
+
+def base():
+    """Absolute origin for the brand serving this request."""
+    return "https://" + brand()["domain"]
+
+
+@app.middleware("http")
+async def _brand_by_host(request: Request, call_next):
+    host = (request.headers.get("host") or "").split(":")[0].lower()
+    if host.startswith("www."):
+        host = host[4:]
+    tok = _brand_ctx.set(BRANDS.get(host, DEFAULT_BRAND))
+    try:
+        return await call_next(request)
+    finally:
+        _brand_ctx.reset(tok)
+
+
+# ---------- structured data ----------
+def org_ld():
+    b, u = brand(), base()
+    return {
+        "@context": "https://schema.org",
+        "@graph": [
+            {"@type": "Organization", "@id": f"{u}/#org",
+             "name": b["name"], "url": f"{u}/",
+             "description": C.TAGLINE,
+             "logo": f"{u}/static/img/wj-ss-vial.png"},
+            {"@type": "WebSite", "@id": f"{u}/#site",
+             "url": f"{u}/", "name": b["name"],
+             "publisher": {"@id": f"{u}/#org"},
+             "inLanguage": "en-US"},
+        ],
+    }
 
 
 def faq_ld(pairs):
@@ -290,9 +336,9 @@ def product_ld():
     return json.dumps({
         "@context": "https://schema.org", "@type": "Product",
         "name": P.PRODUCT["name"], "alternateName": P.PRODUCT["h2"],
-        "image": "https://whartonjelly.com" + P.PRODUCT["image"],
+        "image": base() + P.PRODUCT["image"],
         "description": P.PRODUCT["sections"][0][1],
-        "brand": {"@type": "Brand", "name": "Wharton Jelly"},
+        "brand": {"@type": "Brand", "name": brand()["name"]},
         "audience": {"@type": "MedicalAudience", "audienceType": "Clinician"},
         "disclaimer": P.LEGAL})
 
@@ -300,9 +346,9 @@ def product_ld():
 def article_ld(headline, body, url):
     return json.dumps({
         "@context": "https://schema.org", "@type": "MedicalWebPage",
-        "headline": headline, "url": "https://whartonjelly.com" + url,
+        "headline": headline, "url": base() + url,
         "description": body[:200],
-        "publisher": {"@id": "https://whartonjelly.com/#org"},
+        "publisher": {"@id": base() + "/#org"},
         "inLanguage": "en-US",
         "reviewedBy": {"@type": "Organization", "name": C.IORE_NAME}})
 
@@ -431,10 +477,12 @@ text-decoration:none;box-shadow:0 5px 20px rgba(0,0,0,.35);transition:transform 
 """
 
 
-def shell(body, user=None, title="Wharton Jelly", nav=True, desc=None,
+def shell(body, user=None, title=None, nav=True, desc=None,
           canon="/", ld=None):
+    b, u = brand(), base()
+    title = (title or b["name"]).replace("Wharton Jelly", b["name"])
     desc = desc or f"{C.TAGLINE} {C.SUBLINE}"
-    ld = ld or json.dumps(ORG_LD)
+    ld = ld or json.dumps(org_ld())
     connect_links = "".join(f'<a href="/connect/{sl}">{e(t)}</a>' for sl, t, _, _ in C.CONNECT)
     links = ""
     right = ('<a class="btn ghost sm" href="/login">Log in</a>'
@@ -446,18 +494,18 @@ def shell(body, user=None, title="Wharton Jelly", nav=True, desc=None,
         right = (f'<span class="mut" style="font-size:13px">{e(user["email"])}</span>'
                  f'<a class="btn ghost sm" href="/logout">Sign out</a>')
     header = f"""<header class="nav"><div class="wrap in">
-<a class="brand" href="/"><span class="t">Wharton</span> <span class="o">Jelly</span></a>
+<a class="brand" href="/">{b["mark"]}</a>
 <nav class="links">{links}</nav>{right}</div></header>""" if nav else ""
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>{e(title)}</title>
 <meta name="description" content="{e(desc)}">
-<link rel="canonical" href="https://whartonjelly.com{e(canon)}">
+<link rel="canonical" href="{u}{e(canon)}">
 <meta property="og:type" content="website">
-<meta property="og:site_name" content="Wharton Jelly">
+<meta property="og:site_name" content="{e(b['name'])}">
 <meta property="og:title" content="{e(title)}">
 <meta property="og:description" content="{e(desc)}">
-<meta property="og:url" content="https://whartonjelly.com{e(canon)}">
-<meta property="og:image" content="https://whartonjelly.com{P.PRODUCT['image']}">
+<meta property="og:url" content="{u}{e(canon)}">
+<meta property="og:image" content="{u}{P.PRODUCT['image']}">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="robots" content="index,follow,max-snippet:-1,max-image-preview:large">
 <script type="application/ld+json">{ld}</script>
@@ -466,7 +514,7 @@ def shell(body, user=None, title="Wharton Jelly", nav=True, desc=None,
 <p style="margin:0 0 10px"><b>Important:</b> {e(C.COMPLIANCE)}</p>
 <p style="margin:0">{e(P.LEGAL)}</p></div></div>
 <footer><div class="in"><div class="fgrid">
-<div><h4>Wharton Jelly</h4>
+<div><h4>{e(b["name"])}</h4>
 <a href="/providers">For doctors &amp; providers</a>
 <a href="/patients">For consumers &amp; patients</a>
 <a href="/science">The science</a>
@@ -488,7 +536,7 @@ def shell(body, user=None, title="Wharton Jelly", nav=True, desc=None,
 <div style="border-top:1px solid var(--line);margin-top:30px;padding-top:20px;
 color:var(--mut);font-size:12.5px">
 Education, protocols and validation are provided through the {e(C.IORE_NAME)}, an independent
-third party. &copy; {time.strftime('%Y')} Wharton Jelly.
+third party. &copy; {time.strftime('%Y')} {e(b["name"])}.
 </div>
 <div class="machine">
 <span>Machine-readable</span>
@@ -535,7 +583,7 @@ def home(request: Request):
     whyparas = "".join(f'<p class="pp">{e(x)}</p>' for x in P.WHY["paras"])
     connparas = "".join(f'<div><p class="pp">{e(x)}</p></div>' for x in P.CONNECTIVE["paras"])
     home_ld = json.dumps({"@context": "https://schema.org", "@graph": [
-        ORG_LD["@graph"][0], ORG_LD["@graph"][1],
+        org_ld()["@graph"][0], org_ld()["@graph"][1],
         json.loads(product_ld()),
         json.loads(faq_ld([(q, a) for q, a in C.FAQ]))]})
     mods = "".join(f"""<div class="card"><div class="kicker">Clinical education</div>
@@ -547,7 +595,7 @@ def home(request: Request):
  poster="/static/img/wj-ss-vial.png"><source src="/static/video/hero-v3.mp4" type="video/mp4"></video>
 <div class="scrim"></div>
 <div class="in">
-<h1 class="hero-h1"><span class="t">Wharton</span> <span class="o">Jelly</span></h1>
+<h1 class="hero-h1">{brand()["mark"]}</h1>
 <div class="cta">
 <a class="btn lg" href="/providers">{ICON_DOCTOR}<span>For doctors &amp; providers</span></a>
 <a class="btn lg" href="/patients">{ICON_PEOPLE}<span>For consumers &amp; patients</span></a>
@@ -646,7 +694,7 @@ full screen.</p>
 <a class="btn" style="background:#04141a" href="/providers/apply">Doctors Join Now</a>
 </div></div>
 <style>{VIDEO_CSS}</style>
-""", user=u, title=f"{C.BRAND} — {C.TAGLINE}",
+""", user=u, title=f'{brand()["name"]} — {C.TAGLINE}',
         desc=f"{C.TAGLINE} {C.SUBLINE} {P.PRODUCT['h2']}, {P.PRODUCT['h3']}.",
         canon="/", ld=home_ld))
 
@@ -870,7 +918,7 @@ async def signup(request: Request):
                       (uid, g("city"), g("state"), zip_, g("interest"), time.time()))
         lead_id = c.execute("""INSERT INTO leads(kind,account_id,created,zip,source,status)
                                VALUES(?,?,?,?,?,'new')""",
-                            (as_, uid, time.time(), zip_, "website")).lastrowid
+                            (as_, uid, time.time(), zip_, f'website@{brand()["domain"]}')).lastrowid
         c.commit()
 
     request.session["uid"] = uid
@@ -882,7 +930,7 @@ async def signup(request: Request):
 
 def _notify_new(kind, email, g, zip_, lead_id):
     rows = [("Name", f"{g('first')} {g('last')}".strip()), ("Email", email),
-            ("Phone", g("phone")), ("ZIP", zip_)]
+            ("Phone", g("phone")), ("ZIP", zip_), ("Came from", brand()["domain"])]
     if kind == "provider":
         rows += [("Clinic", g("clinic")), ("NPI", re.sub(r"\D", "", g("npi"))),
                  ("Address", g("business_address")),
@@ -1607,7 +1655,7 @@ async def connect_submit(slug: str, request: Request):
     with closing(db()) as c:
         lid = c.execute("""INSERT INTO leads(kind,account_id,created,zip,source,status)
                            VALUES('partner',NULL,?,?,?,'new')""",
-                        (time.time(), zip_, f"connect:{slug}")).lastrowid
+                        (time.time(), zip_, f'connect:{slug}@{brand()["domain"]}')).lastrowid
         c.execute("""INSERT INTO lead_notes(lead_id,author_id,ts,note,source)
                      VALUES(?,NULL,?,?,'form')""",
                   (lid, time.time(),
@@ -1804,7 +1852,7 @@ async def outbound_submit(key: str, request: Request, step: str = ""):
                       (uid, g("city"), g("state"), zip_, g("interest"), time.time()))
         lead_id = c.execute("""INSERT INTO leads(kind,account_id,created,zip,source,status)
                                VALUES(?,?,?,?,?,'new')""",
-                            (step, uid, time.time(), zip_, f"outbound:{key}")).lastrowid
+                            (step, uid, time.time(), zip_, f'outbound:{key}@{brand()["domain"]}')).lastrowid
         c.execute("""INSERT INTO lead_notes(lead_id,author_id,ts,note,source)
                      VALUES(?,NULL,?,?,'system')""",
                   (lead_id, time.time(),
@@ -2046,7 +2094,7 @@ def sitemap():
     urls += [(f"/videos/{v['slug']}", "0.6", "monthly") for v in C.VIDEOS]
     urls += [(f"/connect/{s}", "0.5", "yearly") for s, _, _, _ in C.CONNECT]
     body = "".join(
-        f"<url><loc>https://whartonjelly.com{u}</loc>"
+        f"<url><loc>{base()}{u}</loc>"
         f"<changefreq>{cf}</changefreq><priority>{pr}</priority></url>"
         for u, pr, cf in urls)
     return Response(f'<?xml version="1.0" encoding="UTF-8"?>'
@@ -2063,8 +2111,8 @@ def robots():
         "User-agent: PerplexityBot\nAllow: /\n"
         "User-agent: ClaudeBot\nAllow: /\n"
         "User-agent: Google-Extended\nAllow: /\n\n"
-        "Sitemap: https://whartonjelly.com/sitemap.xml\n"
-        "Sitemap: https://whartonjelly.com/answers.xml\n",
+        f"Sitemap: {base()}/sitemap.xml\n"
+        f"Sitemap: {base()}/answers.xml\n",
         media_type="text/plain")
 
 
@@ -2080,8 +2128,8 @@ def answers_xml():
     qa += [(m["title"], m["body"], f"/modules/{m['slug']}") for m in C.MODULES]
     items = "".join(
         f"<answer><question>{e(q)}</question><text>{e(a)}</text>"
-        f"<url>https://whartonjelly.com{u}</url></answer>" for q, a, u in qa)
-    return Response(f'<?xml version="1.0" encoding="UTF-8"?><answers site="whartonjelly.com" '
+        f"<url>{base()}{u}</url></answer>" for q, a, u in qa)
+    return Response(f'<?xml version="1.0" encoding="UTF-8"?><answers site="{brand()["domain"]}" '
                     f'count="{len(qa)}">{items}</answers>', media_type="application/xml")
 
 
@@ -2089,15 +2137,15 @@ def answers_xml():
 def llms_txt():
     """The emerging convention for telling a language model what a site is and
     which pages are worth citing."""
-    lines = [f"# {C.BRAND}", "", f"> {C.TAGLINE} {C.SUBLINE}", "",
+    lines = [f"# {brand()['name']}", "", f"> {C.TAGLINE} {C.SUBLINE}", "",
              f"{P.PRODUCT['h2']} — {P.PRODUCT['h3']}.", "",
              "## Compliance", P.COMPLIANCE if hasattr(P, "COMPLIANCE") else C.COMPLIANCE,
              "", P.LEGAL, "", "## Pages"]
     for u, _, _ in PUBLIC_URLS:
-        lines.append(f"- https://whartonjelly.com{u}")
+        lines.append(f"- {base()}{u}")
     lines += ["", "## Education partner",
               f"- {C.IORE_NAME} ({C.IORE_URL}) — independent third party",
-              "", "## Answer feed", "- https://whartonjelly.com/answers.xml"]
+              "", "## Answer feed", f"- {base()}/answers.xml"]
     return Response("\n".join(lines), media_type="text/plain")
 
 
@@ -2106,10 +2154,9 @@ def schema_json():
     """One document containing every structured-data block the site publishes,
     so the markup can be inspected or validated without crawling each page."""
     return JSONResponse({
-        "organization": ORG_LD,
+        "organization": org_ld(),
         "product": json.loads(product_ld()),
         "faq": json.loads(faq_ld(list(C.FAQ) + list(P.SOURCING))),
-        "sitemaps": ["https://whartonjelly.com/sitemap.xml",
-                     "https://whartonjelly.com/answers.xml"],
-        "llms": "https://whartonjelly.com/llms.txt",
+        "sitemaps": [base() + "/sitemap.xml", base() + "/answers.xml"],
+        "llms": base() + "/llms.txt",
     })
