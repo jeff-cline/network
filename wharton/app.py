@@ -513,7 +513,7 @@ def home(request: Request):
     return HTMLResponse(shell(f"""
 <div class="hero">
 <video autoplay muted loop playsinline preload="metadata"
- poster="/static/img/wj-ss-vial.png"><source src="/static/video/hero-v2.mp4" type="video/mp4"></video>
+ poster="/static/img/wj-ss-vial.png"><source src="/static/video/hero-v3.mp4" type="video/mp4"></video>
 <div class="scrim"></div>
 <div class="in">
 <h1 class="hero-h1"><span class="t">Wharton</span> <span class="o">Jelly</span></h1>
