@@ -390,6 +390,147 @@ def rank_programs(air, claims):
     return out
 
 
+def timing_check(air, calls, window):
+    """Is the post log aligned with the call log at all?
+
+    The honest test is not "how many matched" — with spots twenty minutes apart,
+    windows tile a quarter of the flight and random calls match by accident. The
+    test is the shape of the lag distribution. Real TV response is front-loaded
+    into the first few minutes. Noise is flat. This panel shows the shape, the
+    hour-of-day comparison, and a shift sweep, and then says plainly which it is.
+    """
+    if not air or not calls:
+        return ""
+    tz = setting("tz_offset", DEFAULT_TZ_OFFSET)
+    ats = sorted(a["ts"] for a in air)
+    lo, hi = ats[0], ats[-1]
+    pool = [c for c in calls if lo <= c["ts"] <= hi + timedelta(hours=2)]
+    if not pool:
+        return ""
+
+    # ---- lag histogram ----
+    bands = [(0, 5, "0–5 min"), (5, 10, "5–10 min"), (10, 15, "10–15 min"),
+             (15, 30, "15–30 min"), (30, 60, "30–60 min"), (60, 120, "1–2 hrs"),
+             (120, 10 ** 6, "2+ hrs")]
+    counts = {b[2]: 0 for b in bands}
+    lags = []
+    for c in pool:
+        prev = [a for a in ats if a <= c["ts"]]
+        if not prev:
+            continue
+        lag = (c["ts"] - prev[-1]).total_seconds() / 60
+        lags.append(lag)
+        for a0, a1, name in bands:
+            if a0 <= lag < a1:
+                counts[name] += 1
+                break
+    tot = sum(counts.values()) or 1
+    gaps = sorted((ats[i + 1] - ats[i]).total_seconds() / 60
+                  for i in range(len(ats) - 1) if ats[i + 1] > ats[i])
+    med_gap = gaps[len(gaps) // 2] if gaps else 0
+    chance_pct = min(100.0, (5 / med_gap * 100)) if med_gap else 0
+    observed_pct = counts["0–5 min"] / tot * 100
+    rows = ""
+    peak = max(counts.values()) or 1
+    for _, _, name in bands:
+        v = counts[name]
+        w = int(v / peak * 100)
+        hot = name == "0–5 min"
+        rows += (f'<tr><td style="width:96px">{name}</td>'
+                 f'<td><div class="meter"><i style="width:{w}%;'
+                 f'background:{"linear-gradient(90deg,#17924f,#4fc98a)" if hot else "linear-gradient(90deg,#8496ab,#b8c6d6)"}"></i></div></td>'
+                 f'<td class="center" style="width:70px"><b>{v}</b> '
+                 f'<span class="small mut">{v/tot*100:.0f}%</span></td></tr>')
+
+    # ---- shift sweep ----
+    sweep = []
+    for h in range(-12, 13):
+        sh = timedelta(hours=h)
+        shifted = [a + sh for a in ats]
+        w = timedelta(minutes=window)
+        n = sum(1 for c in calls
+                if any(timedelta(0) <= (c["ts"] - a) <= w for a in shifted))
+        sweep.append((h, n))
+    smax = max(n for _, n in sweep) or 1
+    spark = ""
+    for i, (h, n) in enumerate(sweep):
+        bh = int(n / smax * 44)
+        cur = h == 0
+        spark += (f'<rect x="{i*22+30}" y="{56-bh}" width="15" height="{max(bh,1)}" rx="2" '
+                  f'fill="{"#2f7fd8" if cur else "#c3d2e1"}"><title>{h:+d}h → {n} matched</title>'
+                  f'</rect>')
+        if h % 3 == 0:
+            spark += (f'<text x="{i*22+37}" y="70" text-anchor="middle" font-size="9" '
+                      f'fill="#8496ab">{h:+d}</text>')
+
+    # ---- hour of day ----
+    ah = defaultdict(int)
+    for a in ats:
+        ah[(a + timedelta(hours=tz)).hour] += 1
+    ch = defaultdict(int)
+    for c in pool:
+        ch[(c["ts"] + timedelta(hours=tz)).hour] += 1
+    amax = max(ah.values()) or 1
+    cmax = max(ch.values()) or 1
+    hod = ""
+    for h in range(24):
+        abar = int(ah[h] / amax * 40)
+        cbar = int(ch[h] / cmax * 40)
+        hod += (f'<g><rect x="{h*38+30}" y="{44-abar}" width="14" height="{max(abar,0)}" '
+                f'rx="2" fill="#e09b12"><title>{h:02d}:00 — {ah[h]} airings</title></rect>'
+                f'<rect x="{h*38+46}" y="{44-cbar}" width="14" height="{max(cbar,0)}" rx="2" '
+                f'fill="#2f7fd8"><title>{h:02d}:00 — {ch[h]} calls</title></rect>'
+                f'<text x="{h*38+44}" y="58" text-anchor="middle" font-size="8.5" '
+                f'fill="#8496ab">{h:02d}</text></g>')
+    overnight = sum(v for h, v in ah.items() if h < 6)
+
+    # ---- verdict ----
+    if observed_pct > chance_pct * 1.8 and counts["0–5 min"] >= 8:
+        verdict = ("ok", "The timing lines up.",
+                   f"{observed_pct:.0f}% of calls arrive within five minutes of a spot against "
+                   f"{chance_pct:.0f}% expected by chance. That is a real response curve.")
+    elif observed_pct < chance_pct:
+        verdict = ("warn", "No response signal — and the clock is not why.",
+                   f"Only {observed_pct:.0f}% of calls land within five minutes of a spot, and "
+                   f"pure chance would give {chance_pct:.0f}% because spots are a median "
+                   f"{med_gap:.0f} minutes apart. The lag distribution is flat: calls are "
+                   f"arriving independently of the airings. A wrong timezone would show up as "
+                   f"one tall bar in the sweep below — there isn't one. "
+                   f"{overnight} of {len(ats)} spots run before 6am, when almost nobody calls.")
+    else:
+        verdict = ("warn", "Inconclusive at this volume.",
+                   f"{observed_pct:.0f}% within five minutes against {chance_pct:.0f}% by "
+                   f"chance — too close to call with {len(pool)} calls. More flights will "
+                   f"separate them.")
+
+    return f"""<div class="panel">
+<div class="kicker">Timing check</div>
+<h2 style="margin-bottom:4px">Is the post log actually aligned with the calls?</h2>
+<p class="mut small" style="margin-bottom:12px">Run automatically on whatever log is loaded.
+Times are being read as UTC{tz:+d}.</p>
+<div class="{'okmsg' if verdict[0] == 'ok' else 'warn'}"><b>{e(verdict[1])}</b>
+{e(verdict[2])}</div>
+<div class="grid" style="grid-template-columns:minmax(300px,.85fr) 1.15fr;gap:22px;
+margin-top:14px">
+<div><h3 style="margin-bottom:8px">How long after a spot did each call arrive?</h3>
+<p class="small mut" style="margin-bottom:8px">Real TV response is front-loaded into the green
+bar. Flat means the calls are not coming from the spots.</p>
+<table>{rows}</table>
+<p class="small mut" style="margin-top:8px">Median lag
+<b>{(sorted(lags)[len(lags)//2] if lags else 0):.0f} min</b> · median gap between spots
+<b>{med_gap:.0f} min</b> · {len(pool)} calls in the flight</p></div>
+<div><h3 style="margin-bottom:8px">Shift the log ±12 hours — does any offset fit better?</h3>
+<p class="small mut" style="margin-bottom:8px">If the log were in the wrong timezone, one bar
+would tower over the rest. Blue is the offset in use.</p>
+<svg width="590" height="78" role="img" aria-label="offset sweep">{spark}</svg>
+<h3 style="margin:14px 0 8px">Airings vs calls, by hour of day</h3>
+<p class="small mut" style="margin-bottom:6px"><span style="color:#e09b12">■</span> airings
+<span style="color:#2f7fd8;margin-left:8px">■</span> calls</p>
+<div style="overflow-x:auto"><svg width="950" height="64" role="img"
+ aria-label="hour of day">{hod}</svg></div></div>
+</div></div>"""
+
+
 def calib_table(air, calls, window):
     """If the post log's timezone were wrong, one offset would match far better
     than the others. Showing the grid makes that visible instead of assumed."""
@@ -616,7 +757,7 @@ cut anything.</div>"""
 <td class="center">{n['airings']}</td><td class="center"><b>{n['calls']}</b></td>
 <td class="center">{n['cpa']:.2f}</td></tr>""" for n in nets)
         span = f"{min(a['ts'] for a in air).date()} → {max(a['ts'] for a in air).date()}"
-        ranking_block = f"""
+        ranking_block = timing_check(air, calls, window) + f"""
 <div class="panel">
 <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:16px;
 flex-wrap:wrap;margin-bottom:6px">
