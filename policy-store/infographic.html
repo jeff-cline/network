@@ -1,0 +1,340 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<title>Policy Store — The Autonomous Agency Flow</title>
+<style>
+@page{size:11in 46.79in;margin:0}
+*{box-sizing:border-box;margin:0;padding:0}
+body{width:1100px;background:#081a30;color:#e8f0fa;
+ font:15px/1.5 "Helvetica Neue",Helvetica,Arial,sans-serif;
+ -webkit-print-color-adjust:exact;print-color-adjust:exact}
+.wrap{padding:0 56px 44px}
+
+/* ---------------- header ---------------- */
+.top2{background:linear-gradient(125deg,#06152a,#123a63 55%,#1f5490);
+ padding:46px 56px 40px;border-bottom:4px solid #2f7fd8}
+.brand{font-size:52px;font-weight:800;letter-spacing:-1.6px;line-height:1;color:#fff}
+.brand b{color:#5aa9ff}
+.kick{font-size:13px;letter-spacing:3.4px;text-transform:uppercase;color:#7fb4e8;
+ font-weight:700;margin-top:12px}
+.head-h1{font-size:41px;font-weight:800;letter-spacing:-1px;line-height:1.12;margin-top:20px;
+ color:#fff;max-width:19ch}
+.head-h1 em{font-style:normal;color:#5aa9ff}
+.head-p{font-size:17px;color:#a9c8e8;margin-top:14px;max-width:62ch;line-height:1.55}
+
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-top:30px}
+.stat{background:rgba(255,255,255,.07);border:1px solid rgba(90,169,255,.28);
+ border-radius:11px;padding:16px 18px}
+.stat .n{font-size:30px;font-weight:800;color:#fff;letter-spacing:-.9px;line-height:1}
+.stat .n small{font-size:16px}
+.stat .l{font-size:11.5px;color:#8fb6dc;margin-top:7px;line-height:1.4}
+
+/* ---------------- phases ---------------- */
+.phase{margin-top:40px}
+.phase-h{display:flex;align-items:center;gap:14px;margin-bottom:20px}
+.phase-h .tag{background:#2f7fd8;color:#fff;font-size:11.5px;font-weight:800;letter-spacing:2px;
+ padding:6px 15px;border-radius:30px;text-transform:uppercase;white-space:nowrap}
+.phase-h .tag.amber{background:#e09b12}
+.phase-h .tag.green{background:#17924f}
+.phase-h h2{font-size:25px;font-weight:800;color:#fff;letter-spacing:-.5px}
+.phase-h .rule{flex:1;height:1px;background:rgba(90,169,255,.28)}
+
+.step{display:flex;gap:20px;align-items:flex-start;position:relative;padding-bottom:26px}
+.step:before{content:"";position:absolute;left:26px;top:56px;bottom:-4px;width:2px;
+ background:linear-gradient(180deg,rgba(90,169,255,.55),rgba(90,169,255,.14))}
+.step.last:before{display:none}
+.num{flex:0 0 54px;height:54px;border-radius:50%;background:#2f7fd8;color:#fff;
+ display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:800;
+ box-shadow:0 0 0 6px rgba(47,127,216,.16);z-index:2}
+.num.amber{background:#e09b12;box-shadow:0 0 0 6px rgba(224,155,18,.16)}
+.num.green{background:#17924f;box-shadow:0 0 0 6px rgba(23,146,79,.16)}
+.body{background:rgba(255,255,255,.055);border:1px solid rgba(255,255,255,.11);
+ border-radius:13px;padding:17px 21px;flex:1}
+.body h3{font-size:19.5px;font-weight:800;color:#fff;margin-bottom:5px;letter-spacing:-.3px}
+.body p{font-size:14.5px;color:#a9c8e8;line-height:1.55}
+.body .said{margin-top:11px;background:rgba(90,169,255,.13);border-left:3px solid #5aa9ff;
+ padding:9px 13px;border-radius:0 8px 8px 0;font-size:14px;color:#d3e6fa;font-style:italic}
+.body .said b{font-style:normal;color:#7fc0ff;display:block;font-size:10.5px;
+ letter-spacing:1.6px;text-transform:uppercase;margin-bottom:3px}
+
+.asks{display:grid;grid-template-columns:repeat(3,1fr);gap:11px;margin-top:13px}
+.ask{background:#0d2745;border:1px solid rgba(90,169,255,.34);border-radius:10px;
+ padding:12px;text-align:center}
+.ask .q{font-size:24px;margin-bottom:5px}
+.ask b{display:block;font-size:14.5px;color:#fff}
+.ask span{font-size:11.5px;color:#8fb6dc}
+
+/* price grid */
+.pgrid{width:100%;border-collapse:collapse;margin-top:13px;font-size:13px}
+.pgrid th{background:#0d2745;color:#7fc0ff;padding:8px 6px;font-size:11px;letter-spacing:.6px;
+ text-align:center;border:1px solid rgba(90,169,255,.22)}
+.pgrid th:first-child{text-align:left;padding-left:12px;color:#fff}
+.pgrid td{padding:8px 6px;text-align:center;border:1px solid rgba(255,255,255,.09);
+ color:#a9c8e8}
+.pgrid td:first-child{text-align:left;padding-left:12px;color:#fff;font-weight:700;
+ font-size:13.5px}
+.pgrid .d{display:inline-block;width:7px;height:7px;border-radius:50%;background:#5aa9ff;
+ opacity:.55}
+
+/* phone */
+.phone{width:270px;margin:16px auto 0;background:#0b1f38;border:3px solid #33507a;
+ border-radius:26px;padding:14px 12px 18px}
+.phone .notch{width:74px;height:5px;background:#33507a;border-radius:4px;margin:0 auto 13px}
+.bub{background:#2f7fd8;color:#fff;border-radius:14px 14px 14px 4px;padding:10px 13px;
+ font-size:12.5px;line-height:1.45;margin-bottom:9px}
+.bub .who{font-size:10px;letter-spacing:1.3px;text-transform:uppercase;opacity:.8;
+ margin-bottom:3px}
+.bub .lnk{color:#cfe6ff;text-decoration:underline;font-size:11.5px}
+.bub.me{background:#22354f;border-radius:14px 14px 4px 14px;margin-left:56px;text-align:right}
+.bub.ok{background:#12603a}
+.wait{text-align:center;font-size:11.5px;color:#e09b12;letter-spacing:1.6px;
+ text-transform:uppercase;font-weight:700;margin:11px 0 4px}
+
+/* loop banner */
+.loop{margin-top:16px;background:linear-gradient(100deg,#2f7fd8,#17924f);border-radius:13px;
+ padding:22px 26px;display:flex;align-items:center;gap:22px}
+.loop .ic{font-size:44px;line-height:1}
+.loop h3{font-size:23px;color:#fff;font-weight:800;margin-bottom:5px;letter-spacing:-.3px}
+.loop p{font-size:14.5px;color:#e2f1ff;line-height:1.5}
+
+/* why cards */
+.why{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:20px}
+.wcard{background:rgba(255,255,255,.055);border:1px solid rgba(255,255,255,.12);
+ border-radius:13px;padding:20px 22px}
+.wcard .ic{font-size:30px;margin-bottom:9px;display:block}
+.wcard h3{font-size:19px;color:#fff;font-weight:800;margin-bottom:6px;letter-spacing:-.3px}
+.wcard p{font-size:14px;color:#a9c8e8;line-height:1.55}
+
+.winwin{margin-top:20px;background:#fff;border-radius:14px;padding:26px 30px;color:#0e2745}
+.winwin h2{font-size:26px;font-weight:800;letter-spacing:-.6px;margin-bottom:6px}
+.winwin>p{font-size:15px;color:#4a5c73;margin-bottom:20px}
+.wt{display:grid;grid-template-columns:1fr 1fr;gap:26px}
+.wt h4{font-size:11.5px;letter-spacing:2px;text-transform:uppercase;color:#2f7fd8;
+ font-weight:800;margin-bottom:10px}
+.wt li{list-style:none;position:relative;padding-left:19px;margin-bottom:8px;font-size:14px;
+ color:#33455e;line-height:1.5}
+.wt li:before{content:"✓";position:absolute;left:0;top:0;color:#17924f;font-weight:800}
+
+.foot{margin-top:34px;border-top:2px solid rgba(90,169,255,.3);padding-top:22px;
+ display:flex;justify-content:space-between;align-items:flex-end;gap:28px}
+.foot .c b{font-size:23px;color:#fff;display:block;letter-spacing:-.4px}
+.foot .c{font-size:16px;color:#8fb6dc}
+.foot .d{font-size:10px;color:#5d7b9c;line-height:1.45;text-align:right;max-width:52%}
+</style></head><body>
+
+<div class="top2">
+  <div class="brand">Policy<b>Store</b></div>
+  <div class="kick">Fully Autonomous Insurance Agency</div>
+  <h1 class="head-h1">One call. Three questions. <em>Covered before they hang up.</em></h1>
+  <p class="head-p">A voice answer engine that quotes from the carrier's own price sheet,
+  enrolls by text, takes payment through the administrator, and never leaves the line —
+  at any hour, at any volume, without a person in the loop.</p>
+
+  <div class="stats">
+    <div class="stat"><div class="n">24/7/365</div>
+      <div class="l">Always on. No hold queue, no callback, unlimited concurrent calls</div></div>
+    <div class="stat"><div class="n">$5K–$1<small>M</small></div>
+      <div class="l">Face amounts quoted live from the provider's rate grid</div></div>
+    <div class="stat"><div class="n">3</div>
+      <div class="l">Questions between hello and a real quote</div></div>
+    <div class="stat"><div class="n">$0</div>
+      <div class="l">Salary, benefits, holiday, sick pay, turnover or ramp</div></div>
+  </div>
+</div>
+
+<div class="wrap">
+
+<!-- ============ PHASE 1 ============ -->
+<div class="phase">
+  <div class="phase-h"><span class="tag">Phase 1</span><h2>The conversation</h2>
+    <span class="rule"></span></div>
+
+  <div class="step"><div class="num">1</div><div class="body">
+    <h3>The call is answered</h3>
+    <p>First ring, every time. Two in the morning, Thanksgiving, or the middle of a
+    hundred-call spike — the engine picks up and the conversation starts.</p>
+  </div></div>
+
+  <div class="step"><div class="num">2</div><div class="body">
+    <h3>Intake — three questions</h3>
+    <p>No forms, no wizard, no "please hold." The engine asks what it needs to rate the
+    policy and nothing else.</p>
+    <div class="asks">
+      <div class="ask"><div class="q">🎂</div><b>Age</b><span>Rating band</span></div>
+      <div class="ask"><div class="q">📍</div><b>State</b><span>Filed availability</span></div>
+      <div class="ask"><div class="q">🎯</div><b>Target premium</b>
+        <span>What they want to pay monthly</span></div>
+    </div>
+  </div></div>
+
+  <div class="step"><div class="num">3</div><div class="body">
+    <h3>The grid does the work</h3>
+    <p>Those three answers hit the price sheet the provider supplied. The engine reads a
+    rate — it never invents one.</p>
+    <table class="pgrid">
+      <tr><th>Product line</th><th>$5K</th><th>$25K</th><th>$100K</th><th>$250K</th>
+          <th>$500K</th><th>$1M</th></tr>
+      <tr><td>Travel Insurance</td><td><i class="d"></i></td><td><i class="d"></i></td>
+          <td><i class="d"></i></td><td><i class="d"></i></td><td><i class="d"></i></td>
+          <td><i class="d"></i></td></tr>
+      <tr><td>Accidental Death &amp; Dismemberment</td><td><i class="d"></i></td>
+          <td><i class="d"></i></td><td><i class="d"></i></td><td><i class="d"></i></td>
+          <td><i class="d"></i></td><td><i class="d"></i></td></tr>
+      <tr><td>Accident Medical Expense</td><td><i class="d"></i></td><td><i class="d"></i></td>
+          <td><i class="d"></i></td><td><i class="d"></i></td><td><i class="d"></i></td>
+          <td><i class="d"></i></td></tr>
+      <tr><td>Accident Medical + Critical Illness</td><td><i class="d"></i></td>
+          <td><i class="d"></i></td><td><i class="d"></i></td><td><i class="d"></i></td>
+          <td><i class="d"></i></td><td><i class="d"></i></td></tr>
+      <tr><td>Combined AD&amp;D</td><td><i class="d"></i></td><td><i class="d"></i></td>
+          <td><i class="d"></i></td><td><i class="d"></i></td><td><i class="d"></i></td>
+          <td><i class="d"></i></td></tr>
+    </table>
+  </div></div>
+
+  <div class="step"><div class="num">4</div><div class="body">
+    <h3>The quote is spoken, live</h3>
+    <p>Coverage and premium come back inside the same breath of conversation. Nobody is
+    told an agent will call them back.</p>
+    <div class="said"><b>The engine says</b>"Based on your age and your state, here's what
+    fits the monthly figure you gave me — and here's the coverage that comes with it."</div>
+  </div></div>
+
+  <div class="step last"><div class="num">5</div><div class="body">
+    <h3>The fork — questions, or enroll?</h3>
+    <p>Questions go to the answer engine and come straight back to the quote. Ready to go
+    moves to enrollment. There is no third door where the call is lost.</p>
+    <div class="said"><b>The engine asks</b>"Do you have any other questions for me, or
+    would you like to go ahead and enroll?"</div>
+  </div></div>
+</div>
+
+<!-- ============ PHASE 2 ============ -->
+<div class="phase">
+  <div class="phase-h"><span class="tag amber">Phase 2</span><h2>The enrollment</h2>
+    <span class="rule"></span></div>
+
+  <div class="step"><div class="num amber">6</div><div class="body">
+    <h3>A text goes out while they are still on the line</h3>
+    <p>A secure enrollment link lands on the customer's phone mid-conversation. Nothing is
+    mailed, nothing is scheduled, nobody is transferred.</p>
+    <div class="phone">
+      <div class="notch"></div>
+      <div class="bub"><div class="who">PolicyStore</div>Here's your enrollment for the
+        coverage we just discussed. Tap to review and pay securely.<br>
+        <span class="lnk">policystore.com/e/7K2Q</span></div>
+      <div class="wait">⏳ agent waits on the line</div>
+      <div class="bub me">Got it — done ✅</div>
+      <div class="bub ok">Payment received. You're covered. Documents are on their way to
+        your email.</div>
+    </div>
+  </div></div>
+
+  <div class="step last"><div class="num amber">7</div><div class="body">
+    <h3>The agent waits — it does not hand off</h3>
+    <p>The call stays open while the customer opens the link. If they have a question
+    halfway through, the same voice that quoted them answers it.</p>
+  </div></div>
+</div>
+
+<!-- ============ PHASE 3 ============ -->
+<div class="phase">
+  <div class="phase-h"><span class="tag green">Phase 3</span><h2>The money</h2>
+    <span class="rule"></span></div>
+
+  <div class="step"><div class="num green">8</div><div class="body">
+    <h3>Payment runs through the third-party administrator</h3>
+    <p>The customer pays the administrator directly. Card details never touch the agent,
+    the call, or the recording — which is exactly where you want that boundary.</p>
+  </div></div>
+
+  <div class="step last"><div class="num green">9</div><div class="body">
+    <h3>The administrator posts acceptance back</h3>
+    <p>Acceptance returns to the engine automatically. The policy is issued and the
+    documents go out — all before the call ends.</p>
+  </div></div>
+</div>
+
+<!-- ============ PHASE 4 ============ -->
+<div class="phase">
+  <div class="phase-h"><span class="tag">Phase 4</span><h2>The loop</h2>
+    <span class="rule"></span></div>
+
+  <div class="step"><div class="num">10</div><div class="body">
+    <h3>Thank you — and confirmation in writing</h3>
+    <div class="said"><b>The engine says</b>"Thank you. You're covered, and your documents
+    are on the way to your email."</div>
+  </div></div>
+
+  <div class="step last"><div class="num">11</div><div class="body">
+    <h3>It does not hang up</h3>
+    <p>The single most valuable second in the call. A human agent, paid by the hour and
+    measured on handle time, wants the call over. The engine has no such incentive.</p>
+    <div class="said"><b>The engine asks</b>"Is there anything else I can help you with
+    today?"</div>
+  </div></div>
+
+  <div class="loop"><div class="ic">↺</div>
+    <div><h3>Any second need re-enters intake at step 2</h3>
+    <p>Travel cover for a trip they just mentioned. Accident medical for a spouse. One
+    conversation becomes several policies — and the only way it ends is the customer
+    saying they're done.</p></div></div>
+</div>
+
+<!-- ============ WHY ============ -->
+<div class="phase">
+  <div class="phase-h"><span class="tag">Why AI</span><h2>Why the machine is right for this job</h2>
+    <span class="rule"></span></div>
+
+  <div class="why">
+    <div class="wcard"><span class="ic">🛡️</span><h3>It mitigates risk</h3>
+      <p>The same approved script every time. Only carrier-filed rates. No off-script
+      statements, no promises the policy doesn't make, no bad day. Every word captured and
+      auditable. Compliance stops being a training problem and becomes a property of the
+      system.</p></div>
+
+    <div class="wcard"><span class="ic">🌙</span><h3>It is always on</h3>
+      <p>Nights, weekends, holidays, and the hour after a news story sends people looking
+      for accident cover. Volume that would need a fifty-seat floor is handled at once —
+      and the fiftieth caller gets the same conversation as the first.</p></div>
+
+    <div class="wcard"><span class="ic">💸</span><h3>It carries no employment overhead</h3>
+      <p>No salary, benefits, holiday, sick pay, overtime, recruiting, ramp time, attrition
+      or seat cost. Capacity scales with demand rather than headcount, and a slow month
+      costs nothing at all.</p></div>
+
+    <div class="wcard"><span class="ic">⚡</span><h3>It streamlines everything</h3>
+      <p>Three questions to a quote. One text to enroll. One post-back to issue. What used
+      to be a callback, a paper application and a week of chasing collapses into a single
+      unbroken conversation.</p></div>
+  </div>
+
+  <div class="winwin">
+    <h2>A win on both sides of the transaction</h2>
+    <p>Risk mitigation, cost savings and a shorter path to coverage — for the person buying
+    and for the carrier writing.</p>
+    <div class="wt">
+      <div><h4>For the consumer</h4><ul>
+        <li>Answered immediately, at whatever hour they actually thought about it</li>
+        <li>Quoted honestly against the budget they named themselves</li>
+        <li>No pressure, no pitch that drifts, no callback that never comes</li>
+        <li>Covered and confirmed before the call ends</li></ul></div>
+      <div><h4>For the carrier</h4><ul>
+        <li>Lower acquisition cost with no floor to staff or scale</li>
+        <li>Identical disclosure on every single call</li>
+        <li>Cleaner applications and fewer downstream corrections</li>
+        <li>A complete, auditable record of every conversation</li></ul></div>
+    </div>
+  </div>
+</div>
+
+<div class="foot">
+  <div class="c"><b>Jeff Cline</b>972-800-6670 · policystore.com</div>
+  <div class="d">Business process overview for discussion only. Not an offer of insurance,
+  not a solicitation, and not a description of any policy's terms, benefits or exclusions.
+  Product availability, rates and issue ages vary by state and by carrier filing. Any
+  deployment operates under the agency's licensing and applicable state department of
+  insurance requirements.</div>
+</div>
+
+</div>
+</body></html>
