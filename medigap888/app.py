@@ -457,9 +457,24 @@ def attribute(air, calls, window_min):
     return claims
 
 
-def rank_programs(air, claims):
-    agg = defaultdict(lambda: {"airings": 0, "calls": 0, "direct": 0, "networks": set(),
-                               "lags": []})
+def rank_programs(air, claims, d888=None):
+    """Break the attributed calls into a confidence ladder rather than one number.
+
+      888        dialled the QR number. That number appears nowhere but the TV
+                 ad, so it is the only attribution that is certain.
+      same state a call to the main line from a state that also produced an 888
+                 call within ten minutes — circumstantial but meaningful.
+      time only  a call to the main line that merely happened to land in the
+                 window. With spots twenty minutes apart this is close to chance.
+
+    Unique callers are counted alongside raw calls because one person redialling
+    three times is one response, not three."""
+    d888_ids = {c["id"] for c in (d888 or [])}
+    # states that produced a QR call, and roughly when
+    qr_moments = [(c["state"], c["ts"]) for c in (d888 or []) if c["state"]]
+    agg = defaultdict(lambda: {"airings": 0, "n888": 0, "nstate": 0, "ntime": 0,
+                               "networks": set(), "lags": [], "callers": set(),
+                               "calls": 0})
     for a in air:
         k = a["program"] or "(untitled)"
         g = agg[k]
@@ -469,16 +484,27 @@ def rank_programs(air, claims):
         for c in claims.get(a["id"], []):
             g["calls"] += 1
             g["lags"].append(c["lag_sec"])
-            if c["to"].endswith(NUM_888):
-                g["direct"] += 1
+            g["callers"].add(c["frm"])
+            if c["id"] in d888_ids or c["to"].endswith(NUM_888):
+                g["n888"] += 1
+            elif c["state"] and any(
+                    st == c["state"] and abs((ts - c["ts"]).total_seconds()) <= WIN_SAME_STATE * 60
+                    for st, ts in qr_moments):
+                g["nstate"] += 1
+            else:
+                g["ntime"] += 1
     out = []
     for k, g in agg.items():
+        uniq = len(g["callers"])
         out.append({"program": k, "airings": g["airings"], "calls": g["calls"],
-                    "direct": g["direct"],
-                    "cpa": (g["calls"] / g["airings"]) if g["airings"] else 0,
+                    "direct": g["n888"], "n888": g["n888"], "nstate": g["nstate"],
+                    "ntime": g["ntime"], "unique": uniq,
+                    "cpa": (uniq / g["airings"]) if g["airings"] else 0,
+                    "raw_cpa": (g["calls"] / g["airings"]) if g["airings"] else 0,
                     "networks": ", ".join(sorted(g["networks"])),
                     "avg_lag": (sum(g["lags"]) / len(g["lags"])) if g["lags"] else None})
-    out.sort(key=lambda x: (-x["cpa"], -x["calls"], x["program"]))
+    # the QR number decides the order; everything else is a tie-break
+    out.sort(key=lambda x: (-x["n888"], -x["nstate"], -x["unique"], -x["cpa"], x["program"]))
     return out
 
 
@@ -925,7 +951,7 @@ def dashboard(request: Request, days: int = 30, window: int = 0, batch: str = ""
     ranking_block = ""
     if air:
         claims = attribute(air, calls, window)
-        progs = rank_programs(air, claims)
+        progs = rank_programs(air, claims, direct)
         nets = rank_networks(air, claims)
         matched = sum(len(v) for v in claims.values())
         top = progs[0]["cpa"] if progs else 0
@@ -949,7 +975,7 @@ cut anything.</div>"""
             # medalling an alphabetical tie would read as a finding.
             if p["calls"] == 0 and not shown_divider:
                 shown_divider = True
-                prows += (f'<tr><td colspan="5" style="background:#f6f9fc;color:#8496ab;'
+                prows += (f'<tr><td colspan="8" style="background:#f6f9fc;color:#8496ab;'
                           f'font-size:12px;letter-spacing:.06em;text-transform:uppercase;'
                           f'font-weight:800;padding:8px 0">No calls attributed — '
                           f'{len(progs) - len(produced)} programmes, tied, listed '
@@ -962,8 +988,11 @@ cut anything.</div>"""
 <div><b>{e(p['program'])}</b><br>
 <span class="small mut">{e(p['networks'] or '—')}</span></div></div></td>
 <td class="center">{p['airings']}</td>
+<td class="center">{f'<b style="color:var(--ok);font-size:16px">{p["n888"]}</b>' if p['n888'] else '<span class="mut">—</span>'}</td>
+<td class="center">{f'<b>{p["nstate"]}</b>' if p['nstate'] else '<span class="mut">—</span>'}</td>
+<td class="center">{f'{p["ntime"]}' if p['ntime'] else '<span class="mut">—</span>'}</td>
 <td class="center"><b>{p['calls']}</b>
-{f'<br><span class="tag blue">{p["direct"]} direct</span>' if p['direct'] else ''}</td>
+{f'<br><span class="small mut">{p["unique"]} caller{"s" if p["unique"] != 1 else ""}</span>' if p['calls'] != p['unique'] else ''}</td>
 <td><div style="display:flex;align-items:center;gap:9px">
 <div class="meter" style="flex:1"><i style="width:{pct}%"></i></div>
 <b style="min-width:42px;text-align:right">{p['cpa']:.2f}</b></div></td>
@@ -982,8 +1011,13 @@ flex-wrap:wrap;margin-bottom:6px">
 <p class="mut small" style="margin:4px 0 0">{len(air)} airings, {span} · <b>{matched}</b> of
 {len(in_window)} calls in the flight window attributed ({cover:.0f}% coverage) inside a
 {window}-minute response window · {len(produced)} of {len(progs)} programmes produced a call ·
-ranked by calls per airing, because a programme that ran twice and pulled four calls beat one
-that ran forty times and pulled six.</p>
+ranked by <b>888 calls first</b>, because that number appears nowhere but the TV ad.</p>
+<p class="small mut" style="margin:8px 0 0;max-width:96ch"><b style="color:var(--ok)">888</b>
+dialled the QR number — the only certain attribution.
+<b>Same state</b> called the main line from a state that also produced an 888 call within ten
+minutes. <b>Time only</b> called the main line and merely landed in the window; with spots a
+median twenty minutes apart that is close to chance. <b>Callers</b> counts people, not dials —
+one person redialling three times is one response.</p>
 </div>
 <form method="get" style="display:flex;gap:8px;align-items:flex-end">
 <input type="hidden" name="batch" value="{e(batch)}">
@@ -993,8 +1027,14 @@ that ran forty times and pulled six.</p>
 </select></div></form></div>
 {caveat}
 <div class="tw"><table>
-<tr><th>Programme</th><th class="center">Airings</th><th class="center">Calls</th>
-<th>Calls per airing</th><th class="center">Avg. lag</th></tr>{prows}</table></div>
+<tr><th>Programme</th><th class="center">Airings</th>
+<th class="center" style="color:var(--ok)">888<br><span style="font-weight:600;
+text-transform:none">QR — certain</span></th>
+<th class="center">Same state<br><span style="font-weight:600;text-transform:none">±10 min</span></th>
+<th class="center">Time only<br><span style="font-weight:600;text-transform:none">800 line</span></th>
+<th class="center">Total<br><span style="font-weight:600;text-transform:none">calls / callers</span></th>
+<th>Unique callers<br><span style="font-weight:600;text-transform:none">per airing</span></th>
+<th class="center">Avg. lag</th></tr>{prows}</table></div>
 <details style="margin-top:12px"><summary>Calibration — match rate by assumed post-log timezone
 and window</summary>{calib_table(air, calls, window)}</details>
 </div>
@@ -1113,6 +1153,7 @@ def data_json(days: int = 30, window: int = 0):
     lo, hi = flight_bounds(air, window)
     calls = calls_between(lo, hi) if air else []
     claims = attribute(air, calls, window) if air else {}
+    progs_json = rank_programs(air, claims, direct) if air else []
     return JSONResponse({
         "number_888": NUM_888, "number_800": NUM_800,
         "direct_888_total": len(direct),
@@ -1122,7 +1163,7 @@ def data_json(days: int = 30, window: int = 0):
                    "status": r["status"], "all_calls_5min": r["all_calls"],
                    "same_state_10min": r["same_state"]} for r in rows],
         "airings": len(air), "window_min": window,
-        "programs": rank_programs(air, claims) if air else [],
+        "programs": progs_json,
         "networks": rank_networks(air, claims) if air else [],
     })
 
