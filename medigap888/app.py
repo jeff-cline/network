@@ -956,6 +956,34 @@ def dashboard(request: Request, days: int = 30, window: int = 0, batch: str = ""
         matched = sum(len(v) for v in claims.values())
         top = progs[0]["cpa"] if progs else 0
         produced = [p for p in progs if p["calls"] > 0]
+        # A zero in the 888 column reads as "nobody called". Say which it is:
+        # nobody called, or somebody called outside the window.
+        _lo888 = min(a["ts"] for a in air) - timedelta(hours=12)
+        _hi888 = max(a["ts"] for a in air) + timedelta(hours=12)
+        qr_in_flight = [c for c in direct if _lo888 <= c["ts"] <= _hi888]
+        qr_attributed = sum(p["n888"] for p in progs)
+        if not qr_in_flight:
+            qr_note = ('<div class="warn"><b>No calls to the 888 number during this flight.</b> '
+                       'The QR number is the only certain attribution there is, and it did not '
+                       'ring — so nothing in the 888 column can be anything but zero.</div>')
+        elif qr_attributed:
+            qr_note = (f'<div class="okmsg"><b>{qr_attributed} of {len(qr_in_flight)} '
+                       f'888 call(s) during this flight fall inside the response window</b> and '
+                       f'are credited below.</div>')
+        else:
+            _c = qr_in_flight[0]
+            _prev = [a for a in sorted(air, key=lambda x: x["ts"]) if a["ts"] <= _c["ts"]]
+            _lag = ((_c["ts"] - _prev[-1]["ts"]).total_seconds()/60) if _prev else None
+            _pn = _prev[-1]["program"] if _prev else "—"
+            qr_note = (f'<div class="warn"><b>{len(qr_in_flight)} call to the 888 number did land '
+                       f'during this flight — it just is not credited to a programme.</b> '
+                       f'It came in at '
+                       f'{to_local(_c["ts"]).strftime("%a %d %b, %H:%M")} '
+                       f'{e(tzabbr)}, '
+                       + (f'{_lag:.0f} minutes after the nearest spot ({e(_pn)}), which is '
+                          f'outside the {window}-minute window. Widen the window above and it '
+                          f'attributes.' if _lag is not None else 'with no spot before it.')
+                       + '</div>')
         lo = min(a["ts"] for a in air)
         hi = max(a["ts"] for a in air) + timedelta(minutes=window)
         in_window = [c for c in calls if lo <= c["ts"] <= hi]
@@ -1025,6 +1053,7 @@ one person redialling three times is one response.</p>
 <select name="window" onchange="this.form.submit()">
 {"".join(f'<option value="{w}" {"selected" if w == window else ""}>{w} min</option>' for w in (2,3,5,10,15,30))}
 </select></div></form></div>
+{qr_note}
 {caveat}
 <div class="tw"><table>
 <tr><th>Programme</th><th class="center">Airings</th>
