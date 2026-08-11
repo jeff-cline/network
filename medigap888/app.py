@@ -18,9 +18,11 @@ Then it matches all of it against the TV post log so the programmes can be
 ranked by what they actually produced.
 """
 import csv, io, json, os, re, secrets, sqlite3, subprocess, time
+from bisect import bisect_right
 from collections import defaultdict
 from contextlib import closing
 from datetime import datetime, timedelta, date
+from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, Request, UploadFile, File, Form, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, Response
@@ -37,6 +39,13 @@ NUM_800 = "8006334427"
 # that is UTC-4; the offset is a setting because it will be UTC-5 in winter and
 # because not every log house uses Eastern.
 DEFAULT_TZ_OFFSET = -4
+# A frozen offset is right until the clocks change. "Eastern" is UTC-4 in August
+# and UTC-5 in December, so the log timezone is stored as a zone name and the
+# offset is resolved per airing date.
+DEFAULT_TZ_NAME = "America/New_York"
+TZ_CHOICES = [("America/New_York", "Eastern (handles EDT/EST automatically)"),
+              ("America/Chicago", "Central"), ("America/Denver", "Mountain"),
+              ("America/Los_Angeles", "Pacific"), ("UTC", "Already UTC")]
 DEFAULT_WINDOW_MIN = 5          # response window after a spot airs
 WIN_ALL_CALLS = 5               # ± minutes, 888 vs the 800 line
 WIN_SAME_STATE = 10             # ± minutes, same-state correlation
@@ -70,7 +79,23 @@ def norm(n):
     return re.sub(r"\D", "", n or "")
 
 
+_CALLS_CACHE = {"at": 0, "days": 0, "rows": None}
+_CALLS_TTL = 45
+
+
 def load_calls(days=120):
+    """Cached. The dashboard auto-refreshes every minute and several panels each
+    want the same rows; without this we re-queried 27,000 records per panel."""
+    now = time.time()
+    c = _CALLS_CACHE
+    if c["rows"] is not None and c["days"] >= days and (now - c["at"]) < _CALLS_TTL:
+        return c["rows"]
+    rows = _load_calls_uncached(days)
+    _CALLS_CACHE.update({"at": now, "days": days, "rows": rows})
+    return rows
+
+
+def _load_calls_uncached(days=120):
     """Every call in the window, normalised. One query, then all the correlation
     work happens in memory — the volumes here are small and it keeps the
     production database out of the loop."""
@@ -106,6 +131,29 @@ CREATE TABLE IF NOT EXISTS batches(
 CREATE TABLE IF NOT EXISTS settings(k TEXT PRIMARY KEY, v TEXT);
 CREATE INDEX IF NOT EXISTS ix_pl_aired ON postlog(aired_utc);
 """
+
+
+def tz_name():
+    return setting("tz_name", DEFAULT_TZ_NAME)
+
+
+def to_utc(local_naive, zone=None):
+    """Convert a wall-clock time in the log's timezone to UTC, honouring whether
+    that date was in daylight saving."""
+    z = ZoneInfo(zone or tz_name())
+    return local_naive.replace(tzinfo=z).astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
+
+
+def to_local(utc_naive, zone=None):
+    z = ZoneInfo(zone or tz_name())
+    return utc_naive.replace(tzinfo=ZoneInfo("UTC")).astimezone(z).replace(tzinfo=None)
+
+
+def offset_now(when=None, zone=None):
+    """The offset in force on a given date — for labelling, not for maths."""
+    z = ZoneInfo(zone or tz_name())
+    t = (when or datetime.utcnow()).replace(tzinfo=ZoneInfo("UTC")).astimezone(z)
+    return int(t.utcoffset().total_seconds() // 3600), t.tzname()
 
 
 def db():
@@ -236,7 +284,7 @@ def _match_col(header):
     return idx
 
 
-def parse_postlog(data, filename, tz_offset):
+def parse_postlog(data, filename, tz_offset, zone=None):
     """Accepts .xlsx or .csv. Returns (rows, problems)."""
     rows, problems = [], []
     header, body = None, []
@@ -299,7 +347,8 @@ def parse_postlog(data, filename, tz_offset):
                 continue
             tt = (int(m.group(1)), int(m.group(2)), int(m.group(3) or 0))
         local = datetime(dd.year, dd.month, dd.day, tt[0], tt[1], tt[2])
-        utc = local - timedelta(hours=tz_offset)
+        # per-row conversion, so a flight spanning the clock change is still right
+        utc = to_utc(local, zone) if zone else (local - timedelta(hours=tz_offset))
         rows.append({
             "aired_local": local.isoformat(sep=" "), "aired_utc": utc.isoformat(sep=" "),
             "program": str(cell(r, "program") or "").strip(),
@@ -350,18 +399,29 @@ def airings(batch=None):
 def attribute(air, calls, window_min):
     """A call belongs to a spot if it lands inside the response window that
     starts when the spot airs. Where two spots overlap the same call, the
-    nearer one takes it — a call cannot be counted twice."""
+    nearer one takes it — a call cannot be counted twice.
+
+    Binary search over sorted airings, and only the calls that fall inside the
+    flight are considered. The naive version compared every call against every
+    airing, which at 27,000 calls and 105 spots was three million comparisons
+    per sweep step — and the calibration grid runs thirty of them."""
+    if not air or not calls:
+        return defaultdict(list)
+    ordered = sorted(air, key=lambda a: a["ts"])
+    stamps = [a["ts"] for a in ordered]
     win = timedelta(minutes=window_min)
+    lo, hi = stamps[0], stamps[-1] + win
     claims = defaultdict(list)
     for c in calls:
-        best, best_gap = None, None
-        for a in air:
-            gap = c["ts"] - a["ts"]
-            if timedelta(0) <= gap <= win:
-                if best_gap is None or gap < best_gap:
-                    best, best_gap = a, gap
-        if best is not None:
-            claims[best["id"]].append({**c, "lag_sec": int(best_gap.total_seconds())})
+        t = c["ts"]
+        if t < lo or t > hi:
+            continue
+        i = bisect_right(stamps, t) - 1     # nearest spot at or before the call
+        if i < 0:
+            continue
+        gap = t - stamps[i]
+        if timedelta(0) <= gap <= win:
+            claims[ordered[i]["id"]].append({**c, "lag_sec": int(gap.total_seconds())})
     return claims
 
 
@@ -401,7 +461,7 @@ def alignment_888(air, calls):
     of dozen 888 calls before the pattern means anything."""
     if not air:
         return ""
-    tz = setting("tz_offset", DEFAULT_TZ_OFFSET)
+    tz, tzabbr = offset_now(min(a["ts"] for a in air))
     ats = sorted(air, key=lambda a: a["ts"])
     lo, hi = ats[0]["ts"], ats[-1]["ts"]
     d888 = sorted([c for c in calls if c["to"].endswith(NUM_888)], key=lambda c: c["ts"])
@@ -478,7 +538,7 @@ margin-bottom:14px">
 · {e(c['status'])}</p>
 {verdict}
 <div class="grid g2" style="gap:18px;margin-top:12px">
-<div><h4 style="font-size:13px;margin-bottom:6px">What aired within an hour, at UTC{tz:+d}</h4>
+<div><h4 style="font-size:13px;margin-bottom:6px">What aired within an hour, {e(tzabbr)}</h4>
 <div class="tw"><table><tr><th>Aired</th><th>Programme</th><th>Net</th>
 <th class="center">Gap</th></tr>{near_rows or '<tr><td colspan=4 class="mut">Nothing within an hour.</td></tr>'}</table></div></div>
 <div><h4 style="font-size:13px;margin-bottom:6px">Nearest preceding spot at every shift</h4>
@@ -514,7 +574,7 @@ def timing_check(air, calls, window):
     """
     if not air or not calls:
         return ""
-    tz = setting("tz_offset", DEFAULT_TZ_OFFSET)
+    tz, tzabbr = offset_now(sorted(a["ts"] for a in air)[0])
     ats = sorted(a["ts"] for a in air)
     lo, hi = ats[0], ats[-1]
     pool = [c for c in calls if lo <= c["ts"] <= hi + timedelta(hours=2)]
@@ -556,13 +616,14 @@ def timing_check(air, calls, window):
                  f'<span class="small mut">{v/tot*100:.0f}%</span></td></tr>')
 
     # ---- shift sweep ----
+    span_lo = ats[0] - timedelta(hours=13)
+    span_hi = ats[-1] + timedelta(hours=13)
+    nearby = [c for c in calls if span_lo <= c["ts"] <= span_hi]
     sweep = []
     for h in range(-12, 13):
         sh = timedelta(hours=h)
-        shifted = [a + sh for a in ats]
-        w = timedelta(minutes=window)
-        n = sum(1 for c in calls
-                if any(timedelta(0) <= (c["ts"] - a) <= w for a in shifted))
+        shifted = [{"id": i, "ts": a + sh} for i, a in enumerate(ats)]
+        n = sum(len(v) for v in attribute(shifted, nearby, window).values())
         sweep.append((h, n))
     smax = max(n for _, n in sweep) or 1
     spark = ""
@@ -620,7 +681,8 @@ def timing_check(air, calls, window):
 <div class="kicker">Timing check</div>
 <h2 style="margin-bottom:4px">Is the post log actually aligned with the calls?</h2>
 <p class="mut small" style="margin-bottom:12px">Run automatically on whatever log is loaded.
-Times are being read as UTC{tz:+d}.</p>
+Times are being read as {e(tzabbr)} (UTC{tz:+d}) — resolved per airing date, so a
+flight that spans the clock change is still converted correctly.</p>
 <div class="{'okmsg' if verdict[0] == 'ok' else 'warn'}"><b>{e(verdict[1])}</b>
 {e(verdict[2])}</div>
 <div class="grid" style="grid-template-columns:minmax(300px,.85fr) 1.15fr;gap:22px;
@@ -647,16 +709,20 @@ would tower over the rest. Blue is the offset in use.</p>
 def calib_table(air, calls, window):
     """If the post log's timezone were wrong, one offset would match far better
     than the others. Showing the grid makes that visible instead of assumed."""
-    tz_now = setting("tz_offset", DEFAULT_TZ_OFFSET)
+    tz_now, _ = offset_now(min(a["ts"] for a in air))
     wins = (2, 5, 10, 15, 30)
     head = "".join(f"<th class='center'>{w} min</th>" for w in wins)
     body = ""
+    ats_c = sorted(a["ts"] for a in air)
+    lo_c = ats_c[0] - timedelta(hours=9)
+    hi_c = ats_c[-1] + timedelta(hours=9)
+    nearby_c = [c for c in calls if lo_c <= c["ts"] <= hi_c]
     for tz in (0, -4, -5, -6, -7, -8):
         shift = timedelta(hours=(tz_now - tz))
         shifted = [{**a, "ts": a["ts"] + shift} for a in air]
         cells = ""
         for w in wins:
-            n = sum(len(v) for v in attribute(shifted, calls, w).values())
+            n = sum(len(v) for v in attribute(shifted, nearby_c, w).values())
             hot = (tz == tz_now and w == window)
             cells += (f"<td class='center'{' style=\'background:#e7f0fb;font-weight:800\''
                       if hot else ''}>{n}</td>")
@@ -766,7 +832,7 @@ def shell(body, title="medigap.plus/888", refresh=60):
 def dashboard(request: Request, days: int = 30, window: int = 0, batch: str = "",
               ok: str = "", err: str = ""):
     window = window or setting("window_min", DEFAULT_WINDOW_MIN)
-    tz = setting("tz_offset", DEFAULT_TZ_OFFSET)
+    tz, tzabbr = offset_now()
     try:
         calls = load_calls(days=max(days, 1200))
     except Exception as ex:
@@ -913,8 +979,8 @@ NETWORK_CODE, REGION_CODE and AD_UNIT_TITLE, and tolerates other column names.</
 <form method="post" action="upload" enctype="multipart/form-data" style="margin-top:14px">
 <div class="fr four">
 <div><label>Post log file</label><input type="file" name="file" accept=".xlsx,.xlsm,.csv" required></div>
-<div><label>Log times are</label><select name="tz">
-{"".join(f'<option value="{o}" {"selected" if o == tz else ""}>UTC{o:+d} ({n})</option>' for o, n in ((-4,"Eastern, summer"),(-5,"Eastern, winter"),(-6,"Central, summer"),(-7,"Mountain, summer"),(-8,"Pacific, summer"),(0,"already UTC")))}
+<div><label>Log times are</label><select name="zone">
+{"".join(f'<option value="{z}" {"selected" if z == tz_name() else ""}>{e(n)}</option>' for z, n in TZ_CHOICES)}
 </select></div>
 <div><label>Response window</label><select name="window">
 {"".join(f'<option value="{w}" {"selected" if w == window else ""}>{w} min</option>' for w in (2,3,5,10,15,30))}
@@ -936,7 +1002,8 @@ against the main 800 line and matched to the airing log.</p>
 {tiles}
 <p style="margin-top:16px"><span class="live"><i></i>LIVE</span>
 <span class="small" style="color:#8fb6dc;margin-left:10px">Refreshes every 60 seconds ·
-{len(calls):,} calls loaded · times shown UTC{tz:+d}</span></p>
+{len(calls):,} calls loaded · times shown {e(tzabbr)} (UTC{tz:+d}) ·
+{e(tz_name())}</span></p>
 </div></div>
 <div class="wrap" style="padding:22px 20px 40px">
 
@@ -980,11 +1047,12 @@ back. <a href="data.json">JSON</a> · <a href="?days={days}">refresh</a></p>
 
 @app.post("/upload")
 async def upload(file: UploadFile = File(...), tz: int = Form(DEFAULT_TZ_OFFSET),
-                 window: int = Form(DEFAULT_WINDOW_MIN)):
+                 zone: str = Form(DEFAULT_TZ_NAME), window: int = Form(DEFAULT_WINDOW_MIN)):
     data = await file.read()
     if len(data) > 12 * 1024 * 1024:
         return RedirectResponse("./?err=That+file+is+too+large", status_code=303)
-    rows, problems = parse_postlog(data, file.filename or "postlog.xlsx", tz)
+    set_setting("tz_name", zone)
+    rows, problems = parse_postlog(data, file.filename or "postlog.xlsx", tz, zone)
     if not rows:
         msg = "; ".join(problems) or "No airings could be read from that file."
         return RedirectResponse(f"./?err={msg.replace(' ', '+')}", status_code=303)
