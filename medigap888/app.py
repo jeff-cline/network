@@ -390,6 +390,119 @@ def rank_programs(air, claims):
     return out
 
 
+def alignment_888(air, calls):
+    """The QR number, spot by spot. For every 888 call that falls inside a loaded
+    post log, show what was actually on air around it — and whether any timezone
+    shift would put it right after a spot.
+
+    The caveat matters more than the table: with spots roughly twenty minutes
+    apart, a single call sits within ten or fifteen minutes of *some* spot at
+    almost every offset. That is arithmetic, not attribution. It takes a couple
+    of dozen 888 calls before the pattern means anything."""
+    if not air:
+        return ""
+    tz = setting("tz_offset", DEFAULT_TZ_OFFSET)
+    ats = sorted(air, key=lambda a: a["ts"])
+    lo, hi = ats[0]["ts"], ats[-1]["ts"]
+    d888 = sorted([c for c in calls if c["to"].endswith(NUM_888)], key=lambda c: c["ts"])
+    inside = [c for c in d888 if lo - timedelta(hours=12) <= c["ts"] <= hi + timedelta(hours=12)]
+    outside = [c for c in d888 if c not in inside]
+
+    if not inside:
+        return f"""<div class="panel"><div class="kicker">888 alignment</div>
+<h2 style="margin-bottom:6px">The QR number against this log</h2>
+<div class="warn"><b>None of the {len(d888)} calls to 1-888-887-7595 fall inside this flight.</b>
+The log covers {lo.date()} to {hi.date()}; the 888 calls are on other dates entirely. There is
+nothing here to align — upload the post log for the dates those calls landed on and this panel
+will fill in.</div></div>"""
+
+    blocks = ""
+    for c in inside:
+        local = c["ts"] + timedelta(hours=tz)
+        # what was on air around it, at the configured timezone
+        around = [a for a in ats if abs((a["ts"] - c["ts"]).total_seconds()) <= 3600]
+        near_rows = ""
+        for a in around:
+            lag = (c["ts"] - a["ts"]).total_seconds() / 60
+            before = lag >= 0
+            tone = ("#e4f5eb" if 0 <= lag <= 5 else
+                    ("#fdf1dc" if 0 <= lag <= 15 else "transparent"))
+            near_rows += (f'<tr style="background:{tone}">'
+                          f'<td>{(a["ts"]+timedelta(hours=tz)).strftime("%H:%M:%S")}</td>'
+                          f'<td><b>{e(a["program"] or "—")}</b></td>'
+                          f'<td>{e(a["network"] or "—")}</td>'
+                          f'<td class="center">{"+" if before else ""}{lag:.1f} min '
+                          f'{"after" if before else "before"}</td></tr>')
+        # every shift, nearest preceding spot
+        shift_rows = ""
+        best = None
+        for h in range(-8, 9):
+            sh = timedelta(hours=h)
+            prev = [a for a in ats if a["ts"] + sh <= c["ts"]]
+            if not prev:
+                continue
+            a = prev[-1]
+            lag = (c["ts"] - (a["ts"] + sh)).total_seconds() / 60
+            if best is None or lag < best[1]:
+                best = (h, lag, a)
+            tzlabel = f"UTC{tz - h:+d}"
+            us = tzlabel in ("UTC-4", "UTC-5", "UTC-6", "UTC-7", "UTC-8")
+            cur = h == 0
+            tone = "#e7f0fb" if cur else ("transparent" if us else "#fbfbfc")
+            shift_rows += (f'<tr style="background:{tone}">'
+                           f'<td>{h:+d}h</td><td>{tzlabel}'
+                           f'{" <span class=\'tag blue\'>in use</span>" if cur else ""}'
+                           f'{"" if us else " <span class=\'small mut\'>not a US zone</span>"}</td>'
+                           f'<td class="center"><b>{lag:.1f} min</b></td>'
+                           f'<td>{e(a["program"] or "—")} <span class="small mut">'
+                           f'{e(a["network"])}</span></td></tr>')
+        prev_now = [a for a in ats if a["ts"] <= c["ts"]]
+        lag_now = ((c["ts"] - prev_now[-1]["ts"]).total_seconds() / 60) if prev_now else None
+        verdict = ""
+        if best and best[1] <= 5:
+            verdict = (f'<div class="okmsg">Closest fit is a {best[1]:.1f}-minute lag at a '
+                       f'{best[0]:+d}h shift.</div>')
+        else:
+            verdict = (f'<div class="warn"><b>No offset puts this call right after a spot.</b> '
+                       f'The best any shift manages is {best[1]:.1f} minutes '
+                       f'({best[0]:+d}h). At Eastern — what the station says the log is — it '
+                       f'sits {lag_now:.1f} minutes after the nearest spot.</div>'
+                       if lag_now is not None else
+                       f'<div class="warn">No spot precedes this call.</div>')
+        blocks += f"""<div style="border:1px solid var(--line);border-radius:11px;padding:16px;
+margin-bottom:14px">
+<h3 style="margin-bottom:2px">{local.strftime('%a %d %b %Y, %H:%M:%S')} local
+<span class="small mut">({c['ts'].strftime('%H:%M:%S')} UTC)</span></h3>
+<p class="small mut" style="margin-bottom:10px">from {e(c['frm'][-10:])}
+{('· ' + e(c['state']) + ' ' + e(c['zip'])) if c['state'] else '· state unknown'}
+· {e(c['status'])}</p>
+{verdict}
+<div class="grid g2" style="gap:18px;margin-top:12px">
+<div><h4 style="font-size:13px;margin-bottom:6px">What aired within an hour, at UTC{tz:+d}</h4>
+<div class="tw"><table><tr><th>Aired</th><th>Programme</th><th>Net</th>
+<th class="center">Gap</th></tr>{near_rows or '<tr><td colspan=4 class="mut">Nothing within an hour.</td></tr>'}</table></div></div>
+<div><h4 style="font-size:13px;margin-bottom:6px">Nearest preceding spot at every shift</h4>
+<div class="tw"><table><tr><th>Shift</th><th>Log would be</th><th class="center">Lag</th>
+<th>Programme</th></tr>{shift_rows}</table></div></div>
+</div></div>"""
+
+    med_gap = 0
+    gaps = sorted((ats[i+1]["ts"] - ats[i]["ts"]).total_seconds()/60
+                  for i in range(len(ats)-1) if ats[i+1]["ts"] > ats[i]["ts"])
+    if gaps:
+        med_gap = gaps[len(gaps)//2]
+    return f"""<div class="panel"><div class="kicker">888 alignment</div>
+<h2 style="margin-bottom:6px">The QR number, call by call</h2>
+<p class="mut small" style="margin-bottom:12px">{len(inside)} of {len(d888)} calls to
+1-888-887-7595 fall inside this flight
+{f'· the other {len(outside)} are on dates this log does not cover' if outside else ''}.</p>
+<div class="warn"><b>Read the shift table with care.</b> Spots on this buy are a median
+{med_gap:.0f} minutes apart, so a single call sits within ten or fifteen minutes of
+<i>some</i> programme at almost every offset — that is arithmetic, not attribution. A timezone
+can only be identified from a couple of dozen 888 calls showing the same lag, not from one.</div>
+{blocks}</div>"""
+
+
 def timing_check(air, calls, window):
     """Is the post log aligned with the call log at all?
 
@@ -757,7 +870,7 @@ cut anything.</div>"""
 <td class="center">{n['airings']}</td><td class="center"><b>{n['calls']}</b></td>
 <td class="center">{n['cpa']:.2f}</td></tr>""" for n in nets)
         span = f"{min(a['ts'] for a in air).date()} → {max(a['ts'] for a in air).date()}"
-        ranking_block = timing_check(air, calls, window) + f"""
+        ranking_block = alignment_888(air, calls) + timing_check(air, calls, window) + f"""
 <div class="panel">
 <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:16px;
 flex-wrap:wrap;margin-bottom:6px">
