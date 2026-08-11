@@ -457,7 +457,27 @@ def attribute(air, calls, window_min):
     return claims
 
 
-def rank_programs(air, claims, d888=None):
+def attribute_qr(air, d888):
+    """The 888 number is only ever printed on the QR code in the television ad.
+    A caller cannot have obtained it any other way, so every call to it MUST
+    follow an airing — there is no window to apply, only an ordering. Each QR
+    call is assigned to the most recent spot that preceded it, however long ago
+    that was, and the elapsed time is reported rather than used as a filter."""
+    if not air or not d888:
+        return {}
+    ordered = sorted(air, key=lambda a: a["ts"])
+    stamps = [a["ts"] for a in ordered]
+    out = defaultdict(list)
+    for c in d888:
+        i = bisect_right(stamps, c["ts"]) - 1
+        if i < 0:                      # the call precedes the whole flight
+            continue
+        gap = (c["ts"] - stamps[i]).total_seconds()
+        out[ordered[i]["id"]].append({**c, "lag_sec": int(gap)})
+    return out
+
+
+def rank_programs(air, claims, d888=None, qr_claims=None):
     """Break the attributed calls into a confidence ladder rather than one number.
 
       888        dialled the QR number. That number appears nowhere but the TV
@@ -470,24 +490,32 @@ def rank_programs(air, claims, d888=None):
     Unique callers are counted alongside raw calls because one person redialling
     three times is one response, not three."""
     d888_ids = {c["id"] for c in (d888 or [])}
+    qr_claims = qr_claims or {}
     # states that produced a QR call, and roughly when
     qr_moments = [(c["state"], c["ts"]) for c in (d888 or []) if c["state"]]
     agg = defaultdict(lambda: {"airings": 0, "n888": 0, "nstate": 0, "ntime": 0,
-                               "networks": set(), "lags": [], "callers": set(),
-                               "calls": 0})
+                               "networks": set(), "lags": [], "qr_lags": [],
+                               "callers": set(), "calls": 0})
     for a in air:
         k = a["program"] or "(untitled)"
         g = agg[k]
         g["airings"] += 1
         if a["network"]:
             g["networks"].add(a["network"])
+        # QR calls are credited to the spot that preceded them, window or not
+        for c in qr_claims.get(a["id"], []):
+            g["calls"] += 1
+            g["n888"] += 1
+            g["callers"].add(c["frm"])
+            g["lags"].append(c["lag_sec"])
+            g["qr_lags"].append(c["lag_sec"])
         for c in claims.get(a["id"], []):
+            if c["id"] in d888_ids:
+                continue                      # already credited above
             g["calls"] += 1
             g["lags"].append(c["lag_sec"])
             g["callers"].add(c["frm"])
-            if c["id"] in d888_ids or c["to"].endswith(NUM_888):
-                g["n888"] += 1
-            elif c["state"] and any(
+            if c["state"] and any(
                     st == c["state"] and abs((ts - c["ts"]).total_seconds()) <= WIN_SAME_STATE * 60
                     for st, ts in qr_moments):
                 g["nstate"] += 1
@@ -502,6 +530,7 @@ def rank_programs(air, claims, d888=None):
                     "cpa": (uniq / g["airings"]) if g["airings"] else 0,
                     "raw_cpa": (g["calls"] / g["airings"]) if g["airings"] else 0,
                     "networks": ", ".join(sorted(g["networks"])),
+                    "qr_lag": (sum(g["qr_lags"]) / len(g["qr_lags"])) if g["qr_lags"] else None,
                     "avg_lag": (sum(g["lags"]) / len(g["lags"])) if g["lags"] else None})
     # the QR number decides the order; everything else is a tie-break
     out.sort(key=lambda x: (-x["n888"], -x["nstate"], -x["unique"], -x["cpa"], x["program"]))
@@ -951,7 +980,8 @@ def dashboard(request: Request, days: int = 30, window: int = 0, batch: str = ""
     ranking_block = ""
     if air:
         claims = attribute(air, calls, window)
-        progs = rank_programs(air, claims, direct)
+        qr_claims = attribute_qr(air, direct)
+        progs = rank_programs(air, claims, direct, qr_claims)
         nets = rank_networks(air, claims)
         matched = sum(len(v) for v in claims.values())
         top = progs[0]["cpa"] if progs else 0
@@ -962,28 +992,29 @@ def dashboard(request: Request, days: int = 30, window: int = 0, batch: str = ""
         _hi888 = max(a["ts"] for a in air) + timedelta(hours=12)
         qr_in_flight = [c for c in direct if _lo888 <= c["ts"] <= _hi888]
         qr_attributed = sum(p["n888"] for p in progs)
+        qr_lag_note = ""
+        if qr_attributed:
+            _q = [p for p in progs if p["n888"]][0]
+            qr_lag_note = (f' The QR number is credited to the spot that preceded it — '
+                           f'{_q["qr_lag"]/60:.0f} minutes earlier — because that number is '
+                           f'printed nowhere but the television ad, so the caller cannot have '
+                           f'obtained it any other way. No window is applied to it.')
         if not qr_in_flight:
             qr_note = ('<div class="warn"><b>No calls to the 888 number during this flight.</b> '
                        'The QR number is the only certain attribution there is, and it did not '
                        'ring — so nothing in the 888 column can be anything but zero.</div>')
         elif qr_attributed:
             qr_note = (f'<div class="okmsg"><b>{qr_attributed} of {len(qr_in_flight)} '
-                       f'888 call(s) during this flight fall inside the response window</b> and '
-                       f'are credited below.</div>')
+                       f'call(s) to the 888 number during this flight are credited below.</b>'
+                       f'{qr_lag_note}</div>')
         else:
             _c = qr_in_flight[0]
             _prev = [a for a in sorted(air, key=lambda x: x["ts"]) if a["ts"] <= _c["ts"]]
             _lag = ((_c["ts"] - _prev[-1]["ts"]).total_seconds()/60) if _prev else None
             _pn = _prev[-1]["program"] if _prev else "—"
-            qr_note = (f'<div class="warn"><b>{len(qr_in_flight)} call to the 888 number did land '
-                       f'during this flight — it just is not credited to a programme.</b> '
-                       f'It came in at '
-                       f'{to_local(_c["ts"]).strftime("%a %d %b, %H:%M")} '
-                       f'{e(tzabbr)}, '
-                       + (f'{_lag:.0f} minutes after the nearest spot ({e(_pn)}), which is '
-                          f'outside the {window}-minute window. Widen the window above and it '
-                          f'attributes.' if _lag is not None else 'with no spot before it.')
-                       + '</div>')
+            qr_note = (f'<div class="warn"><b>{len(qr_in_flight)} call to the 888 number landed '
+                       f'during this flight, but before any spot in this log.</b> There is no '
+                       f'preceding airing to credit it to.</div>')
         lo = min(a["ts"] for a in air)
         hi = max(a["ts"] for a in air) + timedelta(minutes=window)
         in_window = [c for c in calls if lo <= c["ts"] <= hi]
@@ -1016,7 +1047,7 @@ cut anything.</div>"""
 <div><b>{e(p['program'])}</b><br>
 <span class="small mut">{e(p['networks'] or '—')}</span></div></div></td>
 <td class="center">{p['airings']}</td>
-<td class="center">{f'<b style="color:var(--ok);font-size:16px">{p["n888"]}</b>' if p['n888'] else '<span class="mut">—</span>'}</td>
+<td class="center">{f'<b style="color:var(--ok);font-size:16px">{p["n888"]}</b><br><span class="small mut">{p["qr_lag"]/60:.0f} min after air</span>' if p['n888'] else '<span class="mut">—</span>'}</td>
 <td class="center">{f'<b>{p["nstate"]}</b>' if p['nstate'] else '<span class="mut">—</span>'}</td>
 <td class="center">{f'{p["ntime"]}' if p['ntime'] else '<span class="mut">—</span>'}</td>
 <td class="center"><b>{p['calls']}</b>
@@ -1187,7 +1218,7 @@ def data_json(days: int = 30, window: int = 0):
     lo, hi = flight_bounds(air, window)
     calls = calls_between(lo, hi) if air else []
     claims = attribute(air, calls, window) if air else {}
-    progs_json = rank_programs(air, claims, direct) if air else []
+    progs_json = rank_programs(air, claims, direct, attribute_qr(air, direct)) if air else []
     return JSONResponse({
         "number_888": NUM_888, "number_800": NUM_800,
         "direct_888_total": len(direct),
