@@ -538,116 +538,88 @@ def rank_programs(air, claims, d888=None, qr_claims=None):
 
 
 def alignment_888(air, d888):
-    """The QR number, spot by spot. For every 888 call that falls inside a loaded
-    post log, show what was actually on air around it — and whether any timezone
-    shift would put it right after a spot.
+    """The QR number gets its own panel and its own rules.
 
-    The caveat matters more than the table: with spots roughly twenty minutes
-    apart, a single call sits within ten or fifteen minutes of *some* spot at
-    almost every offset. That is arithmetic, not attribution. It takes a couple
-    of dozen 888 calls before the pattern means anything."""
+    1-888-887-7595 is printed nowhere but the QR code in the television ad, so a
+    caller cannot have obtained it any other way. Every call to it necessarily
+    follows an airing. That makes attribution a question of ordering rather than
+    timing: each call is credited to the most recent spot before it, and the
+    elapsed time is reported rather than used as a filter. No window applies.
+    """
     if not air:
         return ""
-    tz, tzabbr = offset_now(min(a["ts"] for a in air))
+    tzabbr = offset_now(min(a["ts"] for a in air))[1]
     ats = sorted(air, key=lambda a: a["ts"])
     lo, hi = ats[0]["ts"], ats[-1]["ts"]
     d888 = sorted(d888, key=lambda c: c["ts"])
-    inside = [c for c in d888 if lo - timedelta(hours=12) <= c["ts"] <= hi + timedelta(hours=12)]
-    outside = [c for c in d888 if c not in inside]
+    claims = attribute_qr(air, d888)
+    by_call = {}
+    for aid, cs in claims.items():
+        spot = next(a for a in ats if a["id"] == aid)
+        for c in cs:
+            by_call[c["id"]] = (spot, c["lag_sec"])
 
-    if not inside:
-        return f"""<div class="panel"><div class="kicker">888 alignment</div>
-<h2 style="margin-bottom:6px">The QR number against this log</h2>
-<div class="warn"><b>None of the {len(d888)} calls to 1-888-887-7595 fall inside this flight.</b>
-The log covers {lo.date()} to {hi.date()}; the 888 calls are on other dates entirely. There is
-nothing here to align — upload the post log for the dates those calls landed on and this panel
-will fill in.</div></div>"""
-
-    blocks = ""
-    for c in inside:
-        local = c["ts"] + timedelta(hours=tz)
-        # what was on air around it, at the configured timezone
-        around = [a for a in ats if abs((a["ts"] - c["ts"]).total_seconds()) <= 3600]
-        near_rows = ""
-        for a in around:
-            lag = (c["ts"] - a["ts"]).total_seconds() / 60
-            before = lag >= 0
-            tone = ("#e4f5eb" if 0 <= lag <= 5 else
-                    ("#fdf1dc" if 0 <= lag <= 15 else "transparent"))
-            near_rows += (f'<tr style="background:{tone}">'
-                          f'<td>{(a["ts"]+timedelta(hours=tz)).strftime("%H:%M:%S")}</td>'
-                          f'<td><b>{e(a["program"] or "—")}</b></td>'
-                          f'<td>{e(a["network"] or "—")}</td>'
-                          f'<td class="center">{"+" if before else ""}{lag:.1f} min '
-                          f'{"after" if before else "before"}</td></tr>')
-        # every shift, nearest preceding spot
-        shift_rows = ""
-        best = None
-        for h in range(-8, 9):
-            sh = timedelta(hours=h)
-            prev = [a for a in ats if a["ts"] + sh <= c["ts"]]
-            if not prev:
-                continue
-            a = prev[-1]
-            lag = (c["ts"] - (a["ts"] + sh)).total_seconds() / 60
-            if best is None or lag < best[1]:
-                best = (h, lag, a)
-            tzlabel = f"UTC{tz - h:+d}"
-            us = tzlabel in ("UTC-4", "UTC-5", "UTC-6", "UTC-7", "UTC-8")
-            cur = h == 0
-            tone = "#e7f0fb" if cur else ("transparent" if us else "#fbfbfc")
-            shift_rows += (f'<tr style="background:{tone}">'
-                           f'<td>{h:+d}h</td><td>{tzlabel}'
-                           f'{" <span class=\'tag blue\'>in use</span>" if cur else ""}'
-                           f'{"" if us else " <span class=\'small mut\'>not a US zone</span>"}</td>'
-                           f'<td class="center"><b>{lag:.1f} min</b></td>'
-                           f'<td>{e(a["program"] or "—")} <span class="small mut">'
-                           f'{e(a["network"])}</span></td></tr>')
-        prev_now = [a for a in ats if a["ts"] <= c["ts"]]
-        lag_now = ((c["ts"] - prev_now[-1]["ts"]).total_seconds() / 60) if prev_now else None
-        verdict = ""
-        if best and best[1] <= 5:
-            verdict = (f'<div class="okmsg">Closest fit is a {best[1]:.1f}-minute lag at a '
-                       f'{best[0]:+d}h shift.</div>')
+    credited, before_log, after_log = [], [], []
+    for c in d888:
+        if c["id"] in by_call:
+            credited.append(c)
+        elif c["ts"] < lo:
+            before_log.append(c)
         else:
-            verdict = (f'<div class="warn"><b>No offset puts this call right after a spot.</b> '
-                       f'The best any shift manages is {best[1]:.1f} minutes '
-                       f'({best[0]:+d}h). At Eastern — what the station says the log is — it '
-                       f'sits {lag_now:.1f} minutes after the nearest spot.</div>'
-                       if lag_now is not None else
-                       f'<div class="warn">No spot precedes this call.</div>')
-        blocks += f"""<div style="border:1px solid var(--line);border-radius:11px;padding:16px;
-margin-bottom:14px">
-<h3 style="margin-bottom:2px">{local.strftime('%a %d %b %Y, %H:%M:%S')} local
-<span class="small mut">({c['ts'].strftime('%H:%M:%S')} UTC)</span></h3>
-<p class="small mut" style="margin-bottom:10px">from {e(c['frm'][-10:])}
-{('· ' + e(c['state']) + ' ' + e(c['zip'])) if c['state'] else '· state unknown'}
-· {e(c['status'])}</p>
-{verdict}
-<div class="grid g2" style="gap:18px;margin-top:12px">
-<div><h4 style="font-size:13px;margin-bottom:6px">What aired within an hour, {e(tzabbr)}</h4>
-<div class="tw"><table><tr><th>Aired</th><th>Programme</th><th>Net</th>
-<th class="center">Gap</th></tr>{near_rows or '<tr><td colspan=4 class="mut">Nothing within an hour.</td></tr>'}</table></div></div>
-<div><h4 style="font-size:13px;margin-bottom:6px">Nearest preceding spot at every shift</h4>
-<div class="tw"><table><tr><th>Shift</th><th>Log would be</th><th class="center">Lag</th>
-<th>Programme</th></tr>{shift_rows}</table></div></div>
-</div></div>"""
+            after_log.append(c)
 
-    med_gap = 0
-    gaps = sorted((ats[i+1]["ts"] - ats[i]["ts"]).total_seconds()/60
-                  for i in range(len(ats)-1) if ats[i+1]["ts"] > ats[i]["ts"])
-    if gaps:
-        med_gap = gaps[len(gaps)//2]
-    return f"""<div class="panel"><div class="kicker">888 alignment</div>
-<h2 style="margin-bottom:6px">The QR number, call by call</h2>
-<p class="mut small" style="margin-bottom:12px">{len(inside)} of {len(d888)} calls to
-1-888-887-7595 fall inside this flight
-{f'· the other {len(outside)} are on dates this log does not cover' if outside else ''}.</p>
-<div class="warn"><b>Read the shift table with care.</b> Spots on this buy are a median
-{med_gap:.0f} minutes apart, so a single call sits within ten or fifteen minutes of
-<i>some</i> programme at almost every offset — that is arithmetic, not attribution. A timezone
-can only be identified from a couple of dozen 888 calls showing the same lag, not from one.</div>
-{blocks}</div>"""
+    rows = ""
+    for c in credited:
+        spot, lag = by_call[c["id"]]
+        answered = c["secs"] > 10
+        rows += f"""<tr>
+<td><b>{to_local(c['ts']).strftime('%a %d %b, %H:%M:%S')}</b>
+<div class="small mut">{e(c['frm'][-10:])}
+{('· ' + e(c['state']) + ' ' + e(c['zip'])) if c['state'] else ''}</div></td>
+<td><b>{e(spot['program'] or '—')}</b>
+<div class="small mut">{e(spot['network'] or '')} ·
+{to_local(spot['ts']).strftime('%a %d %b, %H:%M:%S')}</div></td>
+<td class="center"><b style="font-size:16px;color:var(--ok)">{lag/60:.0f}</b>
+<div class="small mut">min after air</div></td>
+<td><span class="tag {'ok' if answered else 'red'}">{e(c['status'])}</span>
+<div class="small mut">{c['secs']}s
+{'' if answered else ' — no conversation'}</div></td></tr>"""
+
+    unmatched = ""
+    for c in before_log + after_log:
+        why = ("before this log begins" if c in before_log else "after this log ends")
+        unmatched += (f'<tr><td><b>{to_local(c["ts"]).strftime("%a %d %b %Y, %H:%M")}</b>'
+                      f'<div class="small mut">{e(c["frm"][-10:])}</div></td>'
+                      f'<td colspan="3" class="mut">Airing data {why} — upload the post log '
+                      f'covering that date and this fills in.</td></tr>')
+
+    answered_n = sum(1 for c in credited if c["secs"] > 10)
+    dead = len(credited) - answered_n
+    health = ""
+    if dead:
+        health = (f'<div class="warn"><b>{dead} of {len(credited)} credited QR call'
+                  f'{"s" if len(credited) != 1 else ""} never became a conversation.</b> '
+                  f'The television is producing the call and the phone path is losing it — '
+                  f'a working ad and a broken hand-off look identical in a ranking table, so '
+                  f'this is worth checking before the next flight.</div>')
+
+    return f"""<div class="panel" style="border:2px solid var(--ok)">
+<div class="kicker" style="color:var(--ok)">888 attribution · certain</div>
+<h2 style="margin-bottom:6px">The QR number, credited to the spot that produced it</h2>
+<p class="mut small" style="margin-bottom:12px">1-888-887-7595 appears nowhere but the QR code
+in the television ad, so a caller cannot have got it anywhere else — every call to it must
+follow an airing. Attribution here is <b>ordering, not timing</b>: each call is credited to the
+most recent spot before it, however long ago, and the gap is reported rather than filtered on.
+The response window above does not apply to this table. Times {e(tzabbr)}.</p>
+{health}
+<div class="tw"><table>
+<tr><th>QR call</th><th>Followed this spot</th><th class="center">Elapsed</th>
+<th>Outcome</th></tr>
+{rows or '<tr><td colspan=4 class="mut">No QR calls inside this log.</td></tr>'}
+{unmatched}</table></div>
+<p class="small mut" style="margin-top:10px">{len(credited)} of {len(d888)} calls to the QR
+number fall inside this log's dates.</p>
+</div>"""
 
 
 def timing_check(air, calls, window):
@@ -766,8 +738,10 @@ def timing_check(air, calls, window):
 
     return f"""<div class="panel">
 <div class="kicker">Timing check</div>
-<h2 style="margin-bottom:4px">Is the post log actually aligned with the calls?</h2>
-<p class="mut small" style="margin-bottom:12px">Run automatically on whatever log is loaded.
+<h2 style="margin-bottom:4px">Is the post log aligned with the 800 line?</h2>
+<p class="mut small" style="margin-bottom:12px">This tests the <b>main 800 line</b>, where
+attribution rests entirely on timing. The QR number is measured separately above and does not
+depend on any of this. Run automatically on whatever log is loaded.
 Times are being read as {e(tzabbr)} (UTC{tz:+d}) — resolved per airing date, so a
 flight that spans the clock change is still converted correctly.</p>
 <div class="{'okmsg' if verdict[0] == 'ok' else 'warn'}"><b>{e(verdict[1])}</b>
@@ -938,15 +912,18 @@ def dashboard(request: Request, days: int = 30, window: int = 0, batch: str = ""
 
     # ---------- headline numbers ----------
     d30 = sum(v for _, v in series)
+    qr_claims_top = attribute_qr(air, direct) if air else {}
+    qr_credited = sum(len(v) for v in qr_claims_top.values())
+    qr_answered = sum(1 for v in qr_claims_top.values() for c in v if c["secs"] > 10)
     tiles = f"""<div class="grid g4" style="margin-top:18px">
 <div class="stat"><div class="n">{len(direct)}</div>
-<div class="l">DIRECT 888 calls, all time</div></div>
-<div class="stat"><div class="n">{d30}</div>
-<div class="l">In the last {days} days</div></div>
+<div class="l">Calls to the QR number, all time</div></div>
+<div class="stat"><div class="n">{qr_credited}</div>
+<div class="l">Credited to a spot in the loaded post log</div></div>
+<div class="stat"><div class="n">{qr_answered}</div>
+<div class="l">Of those, calls that became a conversation</div></div>
 <div class="stat"><div class="n">{sum(r['all_calls'] for r in rows)}</div>
-<div class="l">800-line calls within ±{WIN_ALL_CALLS} min of an 888 call</div></div>
-<div class="stat"><div class="n">{sum(r['same_state'] for r in rows)}</div>
-<div class="l">Same-state calls within ±{WIN_SAME_STATE} min</div></div></div>"""
+<div class="l">800-line calls within ±{WIN_ALL_CALLS} min of a QR call</div></div></div>"""
 
     # ---------- the 888 call table ----------
     trs = ""
@@ -1085,7 +1062,8 @@ and keep it tight when you are judging the 800 line.</p>
 </div>
 <form method="get" style="display:flex;gap:8px;align-items:flex-end">
 <input type="hidden" name="batch" value="{e(batch)}">
-<div><label>Response window</label>
+<div><label>Response window <span class="small mut" style="font-weight:600">(800 line only)
+</span></label>
 <select name="window" onchange="this.form.submit()">
 {"".join(f'<option value="{w}" {"selected" if w == window else ""}>{w} min</option>' for w in (2,3,5,10,15,30,45,60))}
 </select></div></form></div>
