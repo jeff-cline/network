@@ -79,31 +79,8 @@ def norm(n):
     return re.sub(r"\D", "", n or "")
 
 
-_CALLS_CACHE = {"at": 0, "days": 0, "rows": None}
-_CALLS_TTL = 45
-
-
-def load_calls(days=120):
-    """Cached. The dashboard auto-refreshes every minute and several panels each
-    want the same rows; without this we re-queried 27,000 records per panel."""
-    now = time.time()
-    c = _CALLS_CACHE
-    if c["rows"] is not None and c["days"] >= days and (now - c["at"]) < _CALLS_TTL:
-        return c["rows"]
-    rows = _load_calls_uncached(days)
-    _CALLS_CACHE.update({"at": now, "days": days, "rows": rows})
-    return rows
-
-
-def _load_calls_uncached(days=120):
-    """Every call in the window, normalised. One query, then all the correlation
-    work happens in memory — the volumes here are small and it keeps the
-    production database out of the loop."""
-    since = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%d")
-    rows = pg(f"""SELECT id, "createdAt", "fromNumber", "toNumber", state, zip,
-                         "durationSec", status, disposition, source
-                  FROM "Call" WHERE "createdAt" >= '{since}' ORDER BY "createdAt";""")
-    calls = []
+def _rows_to_calls(rows):
+    out = []
     for r in rows:
         if len(r) < 10:
             continue
@@ -111,11 +88,79 @@ def _load_calls_uncached(days=120):
             ts = datetime.fromisoformat(r[1].split(".")[0])
         except Exception:
             continue
-        calls.append({"id": r[0], "ts": ts, "frm": norm(r[2]), "to": norm(r[3]),
-                      "state": (r[4] or "").strip().upper(), "zip": r[5],
-                      "secs": int(r[6] or 0), "status": r[7], "disp": r[8],
-                      "source": r[9]})
-    return calls
+        out.append({"id": r[0], "ts": ts, "frm": norm(r[2]), "to": norm(r[3]),
+                    "state": (r[4] or "").strip().upper(), "zip": r[5],
+                    "secs": int(r[6] or 0), "status": r[7], "disp": r[8], "source": r[9]})
+    return out
+
+
+CALL_COLS = ('id, "createdAt", "fromNumber", "toNumber", state, zip, '
+             '"durationSec", status, disposition, source')
+
+
+def calls_between(lo, hi):
+    """Individual call rows inside one window. The post log covers a few days, so
+    this is the only range that ever needs row-level detail — pulling the whole
+    call history to correlate a three-day flight was wasteful and slow."""
+    if lo is None or hi is None:
+        return []
+    return _rows_to_calls(pg(
+        f"""SELECT {CALL_COLS} FROM "Call"
+            WHERE "createdAt" >= '{lo:%Y-%m-%d %H:%M:%S}'
+              AND "createdAt" <= '{hi:%Y-%m-%d %H:%M:%S}'
+            ORDER BY "createdAt";"""))
+
+
+def calls_to_888():
+    """Every call to the QR number, all time. There are a handful, so this stays
+    cheap no matter how long the campaign runs."""
+    return _rows_to_calls(pg(
+        f"""SELECT {CALL_COLS} FROM "Call"
+            WHERE regexp_replace("toNumber",'[^0-9]','','g') LIKE '%{NUM_888}'
+            ORDER BY "createdAt";"""))
+
+
+def calls_around(stamps, minutes):
+    """Calls within N minutes either side of any of the given moments — used for
+    the ALL CALLS and SAME STATE columns, which look around each 888 call rather
+    than across the whole flight."""
+    if not stamps:
+        return []
+    pad = timedelta(minutes=minutes)
+    clauses = " OR ".join(
+        f"""("createdAt" >= '{(t-pad):%Y-%m-%d %H:%M:%S}'
+             AND "createdAt" <= '{(t+pad):%Y-%m-%d %H:%M:%S}')""" for t in stamps)
+    return _rows_to_calls(pg(
+        f'SELECT {CALL_COLS} FROM "Call" WHERE {clauses} ORDER BY "createdAt";'))
+
+
+def daily_counts(number, days):
+    """Counts per day, aggregated in the database. The chart never needed the
+    individual rows."""
+    since = (datetime.utcnow() - timedelta(days=days - 1)).strftime("%Y-%m-%d")
+    rows = pg(f"""SELECT date_trunc('day',"createdAt")::date, COUNT(*)
+                  FROM "Call"
+                  WHERE "createdAt" >= '{since}'
+                    AND regexp_replace("toNumber",'[^0-9]','','g') LIKE '%{number}'
+                  GROUP BY 1 ORDER BY 1;""")
+    got = {}
+    for r in rows:
+        try:
+            got[date.fromisoformat(r[0])] = int(r[1])
+        except Exception:
+            pass
+    end = datetime.utcnow().date()
+    return [(end - timedelta(days=i), got.get(end - timedelta(days=i), 0))
+            for i in range(days - 1, -1, -1)]
+
+
+def flight_bounds(air, window_min=30):
+    """The report's own date range, padded by the response window. Everything
+    correlational happens inside this."""
+    if not air:
+        return None, None
+    ats = [a["ts"] for a in air]
+    return min(ats) - timedelta(minutes=5), max(ats) + timedelta(minutes=window_min)
 
 
 # ----------------------------------------------------------------- sqlite ----
@@ -188,10 +233,10 @@ def set_setting(k, v):
 
 
 # ------------------------------------------------------------- correlation ---
-def analyse(calls):
-    """Split the call set and compute the three columns for every 888 call."""
-    direct = [c for c in calls if c["to"].endswith(NUM_888)]
-    main = [c for c in calls if c["to"].endswith(NUM_800)]
+def analyse(direct, nearby):
+    """The three columns, for every 888 call. `nearby` only needs to contain
+    calls within ten minutes of one of them — that is all this looks at."""
+    main = [c for c in nearby if c["to"].endswith(NUM_800)]
     rows = []
     for d in direct:
         w5 = timedelta(minutes=WIN_ALL_CALLS)
@@ -199,28 +244,15 @@ def analyse(calls):
         near = [m for m in main if abs(m["ts"] - d["ts"]) <= w5]
         same_state = []
         if d["state"]:
-            same_state = [c for c in calls
+            same_state = [c for c in nearby
                           if c["id"] != d["id"] and c["state"] == d["state"]
                           and abs(c["ts"] - d["ts"]) <= w10]
         rows.append({**d, "all_calls": len(near), "near": near,
                      "same_state": len(same_state), "same_state_calls": same_state})
-    return direct, main, rows
+    return rows
 
 
-def by_day(calls, days=30):
-    """Daily counts, zero-filled, so the chart does not lie about quiet days."""
-    if not calls:
-        end = datetime.utcnow().date()
-    else:
-        end = max(c["ts"] for c in calls).date()
-    end = max(end, datetime.utcnow().date())
-    start = end - timedelta(days=days - 1)
-    buckets = {start + timedelta(days=i): 0 for i in range(days)}
-    for c in calls:
-        d = c["ts"].date()
-        if d in buckets:
-            buckets[d] += 1
-    return sorted(buckets.items())
+
 
 
 def bar_chart(series, height=170, colour="#2f7fd8", label=""):
@@ -450,7 +482,7 @@ def rank_programs(air, claims):
     return out
 
 
-def alignment_888(air, calls):
+def alignment_888(air, d888):
     """The QR number, spot by spot. For every 888 call that falls inside a loaded
     post log, show what was actually on air around it — and whether any timezone
     shift would put it right after a spot.
@@ -464,7 +496,7 @@ def alignment_888(air, calls):
     tz, tzabbr = offset_now(min(a["ts"] for a in air))
     ats = sorted(air, key=lambda a: a["ts"])
     lo, hi = ats[0]["ts"], ats[-1]["ts"]
-    d888 = sorted([c for c in calls if c["to"].endswith(NUM_888)], key=lambda c: c["ts"])
+    d888 = sorted(d888, key=lambda c: c["ts"])
     inside = [c for c in d888 if lo - timedelta(hours=12) <= c["ts"] <= hi + timedelta(hours=12)]
     outside = [c for c in d888 if c not in inside]
 
@@ -833,22 +865,28 @@ def dashboard(request: Request, days: int = 30, window: int = 0, batch: str = ""
               ok: str = "", err: str = ""):
     window = window or setting("window_min", DEFAULT_WINDOW_MIN)
     tz, tzabbr = offset_now()
+    air = airings(batch or None)
     try:
-        calls = load_calls(days=max(days, 1200))
+        # Only ever three queries: the 888 calls, the handful around them, and
+        # whatever falls inside the report's own dates.
+        direct = calls_to_888()
+        nearby = calls_around([c["ts"] for c in direct], WIN_SAME_STATE)
+        lo, hi = flight_bounds(air, window)
+        calls = calls_between(lo, hi) if air else []
+        series = daily_counts(NUM_888, days)
+        all_series = daily_counts(NUM_800, days)
     except Exception as ex:
         return HTMLResponse(shell(f"<div class='wrap' style='padding:40px 20px'>"
                                   f"<div class='warn'>Could not read the call database: "
                                   f"{e(str(ex))}</div></div>"), status_code=500)
-    direct, main, rows = analyse(calls)
-    series = by_day(direct, days)
-    all_series = by_day(main, days)
+    rows = analyse(direct, nearby)
 
     # ---------- headline numbers ----------
-    d30 = [c for c in direct if (datetime.utcnow() - c["ts"]).days < days]
+    d30 = sum(v for _, v in series)
     tiles = f"""<div class="grid g4" style="margin-top:18px">
 <div class="stat"><div class="n">{len(direct)}</div>
 <div class="l">DIRECT 888 calls, all time</div></div>
-<div class="stat"><div class="n">{len(d30)}</div>
+<div class="stat"><div class="n">{d30}</div>
 <div class="l">In the last {days} days</div></div>
 <div class="stat"><div class="n">{sum(r['all_calls'] for r in rows)}</div>
 <div class="l">800-line calls within ±{WIN_ALL_CALLS} min of an 888 call</div></div>
@@ -880,7 +918,6 @@ def dashboard(request: Request, days: int = 30, window: int = 0, batch: str = ""
 </tr>"""
 
     # ---------- post log ----------
-    air = airings(batch or None)
     with closing(db()) as c:
         batches = [dict(x) for x in c.execute(
             "SELECT * FROM batches ORDER BY created DESC")]
@@ -936,7 +973,7 @@ cut anything.</div>"""
 <td class="center">{n['airings']}</td><td class="center"><b>{n['calls']}</b></td>
 <td class="center">{n['cpa']:.2f}</td></tr>""" for n in nets)
         span = f"{min(a['ts'] for a in air).date()} → {max(a['ts'] for a in air).date()}"
-        ranking_block = alignment_888(air, calls) + timing_check(air, calls, window) + f"""
+        ranking_block = alignment_888(air, direct) + timing_check(air, calls, window) + f"""
 <div class="panel">
 <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:16px;
 flex-wrap:wrap;margin-bottom:6px">
@@ -1002,7 +1039,7 @@ against the main 800 line and matched to the airing log.</p>
 {tiles}
 <p style="margin-top:16px"><span class="live"><i></i>LIVE</span>
 <span class="small" style="color:#8fb6dc;margin-left:10px">Refreshes every 60 seconds ·
-{len(calls):,} calls loaded · times shown {e(tzabbr)} (UTC{tz:+d}) ·
+{len(calls):,} calls in the report window · times shown {e(tzabbr)} (UTC{tz:+d}) ·
 {e(tz_name())}</span></p>
 </div></div>
 <div class="wrap" style="padding:22px 20px 40px">
@@ -1069,15 +1106,18 @@ async def upload(file: UploadFile = File(...), tz: int = Form(DEFAULT_TZ_OFFSET)
 @app.get("/data.json")
 def data_json(days: int = 30, window: int = 0):
     window = window or setting("window_min", DEFAULT_WINDOW_MIN)
-    calls = load_calls(days=max(days, 1200))
-    direct, main, rows = analyse(calls)
     air = airings()
+    direct = calls_to_888()
+    nearby = calls_around([c["ts"] for c in direct], WIN_SAME_STATE)
+    rows = analyse(direct, nearby)
+    lo, hi = flight_bounds(air, window)
+    calls = calls_between(lo, hi) if air else []
     claims = attribute(air, calls, window) if air else {}
     return JSONResponse({
         "number_888": NUM_888, "number_800": NUM_800,
         "direct_888_total": len(direct),
-        "direct_by_day": [[str(d), v] for d, v in by_day(direct, days)],
-        "all_calls_by_day": [[str(d), v] for d, v in by_day(main, days)],
+        "direct_by_day": [[str(d), v] for d, v in daily_counts(NUM_888, days)],
+        "all_calls_by_day": [[str(d), v] for d, v in daily_counts(NUM_800, days)],
         "calls": [{"at": r["ts"].isoformat(), "from": r["frm"][-10:], "state": r["state"],
                    "status": r["status"], "all_calls_5min": r["all_calls"],
                    "same_state_10min": r["same_state"]} for r in rows],
@@ -1090,7 +1130,7 @@ def data_json(days: int = 30, window: int = 0):
 @app.get("/healthz")
 def healthz():
     try:
-        n = len(load_calls(days=2))
+        n = sum(v for _, v in daily_counts(NUM_800, 2))
         return {"ok": True, "recent_calls": n}
     except Exception as ex:
         return JSONResponse({"ok": False, "error": str(ex)[:200]}, status_code=500)
