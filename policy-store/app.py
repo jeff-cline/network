@@ -309,6 +309,107 @@ DEMO_RATES = {
 }
 
 
+# A live carrier rating API takes precedence over the local table when it is
+# switched on. Results are cached because best_fit() walks every filed benefit
+# amount — without a cache one quote would fire forty-odd calls at the carrier.
+_RATE_CACHE = {}
+_RATE_CACHE_TTL = 300
+
+
+def _dig(obj, path):
+    """Pull a value out of a response by dotted path, e.g. data.premium.monthly.
+    List indexes are allowed: results.0.rate"""
+    cur = obj
+    for part in (path or "").split("."):
+        if part == "":
+            continue
+        if isinstance(cur, list):
+            try:
+                cur = cur[int(part)]
+            except (ValueError, IndexError):
+                return None
+        elif isinstance(cur, dict):
+            cur = cur.get(part)
+        else:
+            return None
+        if cur is None:
+            return None
+    return cur
+
+
+def rating_api_on():
+    cfg = setting("rating_api", {}) or {}
+    return bool(cfg.get("enabled") and cfg.get("url"))
+
+
+def rating_api_call(product, state, age, benefit, deductible=None, tier="single"):
+    """Ask the carrier what this costs. Returns a monthly premium, or None to
+    fall back to the local table."""
+    cfg = setting("rating_api", {}) or {}
+    url = cfg.get("url")
+    if not url:
+        return None
+    key = (product, state, age, benefit, deductible, tier)
+    hit = _RATE_CACHE.get(key)
+    if hit and (time.time() - hit[0]) < _RATE_CACHE_TTL:
+        return hit[1]
+    band = P.band_for(product, age) or ""
+    subs = {"product": product, "state": state, "age": age, "band": band,
+            "benefit": benefit, "deductible": deductible if deductible is not None else 0,
+            "tier": tier, "carrier": P.CARRIER}
+    tmpl = cfg.get("request") or json.dumps(subs)
+    try:
+        body_str = tmpl
+        for k, v in subs.items():
+            body_str = body_str.replace("{" + k + "}", str(v))
+        body = json.loads(body_str)
+    except Exception:
+        body = subs
+    headers = {}
+    try:
+        headers = json.loads(cfg.get("headers") or "{}")
+    except Exception:
+        pass
+    if cfg.get("auth_header") and cfg.get("auth_value"):
+        headers[cfg["auth_header"]] = cfg["auth_value"]
+    method = (cfg.get("method") or "POST").upper()
+    if method == "GET":
+        qs = "&".join(f"{k}={v}" for k, v in body.items())
+        sep = "&" if "?" in url else "?"
+        cmd = ["curl", "-sS", "-w", "\n%{http_code}", "--max-time", "12"]
+        for k, v in headers.items():
+            cmd += ["-H", f"{k}: {v}"]
+        cmd.append(f"{url}{sep}{qs}")
+        try:
+            pr = subprocess.run(cmd, capture_output=True, text=True)
+            raw, _, code = (pr.stdout or "").rpartition("\n")
+            code = int(code or 0)
+        except Exception:
+            code, raw = 0, ""
+    else:
+        code, raw = _post(url, body, headers, timeout=12)
+    if not (200 <= code < 300):
+        log("rating_api", f"{product} {state} age {age} → HTTP {code}", None,
+            {"sent": body, "response": (raw or "")[:500]}, False)
+        return None
+    try:
+        data = json.loads(raw)
+    except Exception:
+        log("rating_api", "unparseable response", None, {"response": (raw or "")[:500]}, False)
+        return None
+    val = _dig(data, cfg.get("response_path") or "monthly_premium")
+    try:
+        val = float(val)
+    except (TypeError, ValueError):
+        log("rating_api", f"no premium at path '{cfg.get('response_path')}'", None,
+            {"response": data}, False)
+        return None
+    if (cfg.get("returns") or "monthly") == "annual":
+        val = val / 12.0
+    _RATE_CACHE[key] = (time.time(), val)
+    return val
+
+
 def rates():
     try:
         with open(RATES_FILE) as f:
@@ -321,11 +422,20 @@ def rates():
 
 
 def rates_are_demo():
+    """Quotes are only 'demo' when they came from the placeholder table. A live
+    carrier API means real pricing, whatever rates.json still says."""
+    if rating_api_on():
+        return False
     return bool(rates().get("_demo", True))
 
 
-def _rate_for(product, age, benefit, deductible=None):
-    """Monthly premium for one insured life on one product."""
+def _rate_for(product, age, benefit, deductible=None, state=None, tier="single"):
+    """Monthly premium for one insured life on one product. The carrier's rating
+    API wins when it is switched on; the local table is the fallback."""
+    if rating_api_on():
+        live = rating_api_call(product, state, age, benefit, deductible, tier)
+        if live is not None:
+            return live
     r = rates()
     band = P.band_for(product, age)
     if not band:
@@ -352,14 +462,15 @@ def quote_premium(products, state, age, benefit, deductible=0, ci_benefit=0,
         amt = ci_benefit if prod == "ci" else benefit
         if prod == "ci" and not amt:
             amt = P.PRODUCTS["ci"]["benefits"][3]
-        base = _rate_for(prod, age, amt, deductible if prod == "ame" else None)
+        base = _rate_for(prod, age, amt, deductible if prod == "ame" else None, state, "single")
         if base is None:
             problems.append(f"{P.PRODUCTS[prod]['short']} has no filed rate at age {age}.")
             continue
         lines.append((f"{P.PRODUCTS[prod]['short']} · {money(amt, False)} · you", base))
         total += base
         if spouse_age:
-            sp = _rate_for(prod, spouse_age, amt, deductible if prod == "ame" else None)
+            sp = _rate_for(prod, spouse_age, amt, deductible if prod == "ame" else None,
+                           state, "single_spouse")
             if sp is None:
                 problems.append(f"{P.PRODUCTS[prod]['short']} has no filed rate at age "
                                 f"{spouse_age} for your spouse.")
@@ -1921,8 +2032,8 @@ def admin_home(request: Request, u=Depends(require_admin)):
 <p class="lead" style="margin-bottom:18px">The whole agency, from here.</p>
 <div class="grid g4" style="margin-bottom:20px">{tiles}</div>
 <div class="panel" style="margin-bottom:18px"><h3 style="margin-bottom:10px">Connections</h3>
-<p>{badge(pp.get('post_url'), 'Ping-post')} {badge(sms.get('provider'), 'SMS')}
-{badge(tpa.get('enroll_url'), 'Administrator')}
+<p>{badge(rating_api_on(), 'Rating API')} {badge(pp.get('post_url'), 'Ping-post')}
+{badge(sms.get('provider'), 'SMS')} {badge(tpa.get('enroll_url'), 'Administrator')}
 {'<span class="tag warn">Demo rates</span>' if rates_are_demo() else '<span class="tag ok">Carrier rates loaded</span>'}
 {'<span class="tag red">Demo gate ON</span>' if setting('gate_enabled', True) else '<span class="tag ok">Site public</span>'}</p>
 <p class="hint">Anything marked <i>simulated</i> still runs the full flow and records the exact
@@ -1940,6 +2051,8 @@ def admin_int(request: Request, u=Depends(require_admin), ok: str = ""):
     pp = setting("pingpost", {}) or {}
     sms = setting("sms", {}) or {}
     tpa = setting("tpa", {}) or {}
+    ra = setting("rating_api", {}) or {}
+    docs = setting("api_docs", {}) or {}
     mapping = json.dumps(pp.get("mapping") or {}, indent=1)
     static = json.dumps(pp.get("static") or {}, indent=1)
     sample = json.dumps({
@@ -1955,6 +2068,72 @@ change — the flow already calls all of it.</p>
 {f'<div class="okmsg">{e(ok)}</div>' if ok else ''}
 
 <form method="post" action="/admin/integrations">
+
+<div class="panel" style="margin-top:18px;border:2px solid var(--blue)">
+<div style="display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap">
+<h3>💵 Carrier rating API — live pricing</h3>
+{'<span class="tag ok">LIVE — quotes are real</span>' if rating_api_on() else '<span class="tag warn">Not connected — using the local table</span>'}</div>
+<p class="mut small" style="margin-top:6px">Point this at the carrier's pricing endpoint and every
+quote rates against it instead of the placeholder table. The demo warnings disappear the moment
+it is switched on.</p>
+<div class="fr three" style="margin-top:14px">
+<div><label>Status</label><select name="ra_enabled">
+<option value="0" {'selected' if not ra.get('enabled') else ''}>Off — use the local table</option>
+<option value="1" {'selected' if ra.get('enabled') else ''}>On — rate against the API</option>
+</select></div>
+<div><label>Method</label><select name="ra_method">
+<option value="POST" {'selected' if (ra.get('method') or 'POST') == 'POST' else ''}>POST</option>
+<option value="GET" {'selected' if ra.get('method') == 'GET' else ''}>GET</option>
+</select></div>
+<div><label>Premium returned as</label><select name="ra_returns">
+<option value="monthly" {'selected' if (ra.get('returns') or 'monthly') == 'monthly' else ''}>Monthly</option>
+<option value="annual" {'selected' if ra.get('returns') == 'annual' else ''}>Annual</option>
+</select></div></div>
+<div class="fr"><div><label>Endpoint URL</label>
+<input type="url" name="ra_url" value="{e(ra.get('url',''))}"
+ placeholder="https://api.carrier.com/v1/rate"></div></div>
+<div class="fr two">
+<div><label>Auth header name</label><input name="ra_auth_header"
+ value="{e(ra.get('auth_header',''))}" placeholder="Authorization  /  x-api-key"></div>
+<div><label>Auth header value</label><input name="ra_auth_value"
+ value="{e(ra.get('auth_value',''))}" placeholder="Bearer …"></div></div>
+<div class="fr"><div><label>Extra headers (JSON)</label>
+<textarea name="ra_headers" style="min-height:70px">{e(ra.get('headers',''))}</textarea></div></div>
+<div class="fr two">
+<div><label>Request body template (JSON)</label>
+<textarea name="ra_request" style="min-height:150px;font-family:ui-monospace,Menlo,monospace;
+font-size:12.5px">{e(ra.get('request','') or json.dumps({"product":"{product}","state":"{state}","age":"{age}","age_band":"{band}","benefit_amount":"{benefit}","deductible":"{deductible}","tier":"{tier}"}, indent=1))}</textarea>
+<p class="hint">Placeholders substituted per call: <code>{{product}}</code> <code>{{state}}</code>
+<code>{{age}}</code> <code>{{band}}</code> <code>{{benefit}}</code> <code>{{deductible}}</code>
+<code>{{tier}}</code></p></div>
+<div><label>Where the premium is in their response</label>
+<input name="ra_response_path" value="{e(ra.get('response_path','') or 'monthly_premium')}"
+ placeholder="data.premium.monthly">
+<p class="hint">Dotted path. List indexes allowed, e.g. <code>results.0.rate</code>.<br><br>
+<b>Product codes we send:</b> <code>add</code>, <code>ame</code>, <code>ci</code>.<br>
+<b>Tier codes:</b> <code>single</code>, <code>single_spouse</code>.<br>
+Responses are cached for five minutes, so walking the benefit ladder does not hammer them.</p>
+</div></div>
+<p style="margin-top:6px"><a class="btn ghost sm" href="/admin/test/rating">Test the rating API
+and show me the raw response</a></p>
+</div>
+
+<div class="panel" style="margin-top:16px"><h3>📄 API documentation</h3>
+<p class="mut small">Paste whatever the carrier and the ping-post buyer send you — endpoint specs,
+field lists, sample payloads, auth notes. It is stored here so the mapping above can be wired to
+match it exactly.</p>
+<div class="fr" style="margin-top:14px"><div><label>Rating / pricing API docs</label>
+<textarea name="docs_rating" style="min-height:200px;font-family:ui-monospace,Menlo,monospace;
+font-size:12.5px" placeholder="Paste the carrier's pricing API documentation here…">{e(docs.get('rating',''))}</textarea></div></div>
+<div class="fr"><div><label>Ping-post API docs</label>
+<textarea name="docs_pingpost" style="min-height:200px;font-family:ui-monospace,Menlo,monospace;
+font-size:12.5px" placeholder="Paste the ping-post buyer's spec here — required fields, accept/reject shape, bid response…">{e(docs.get('pingpost',''))}</textarea></div></div>
+<div class="fr"><div><label>Administrator / TPA docs</label>
+<textarea name="docs_tpa" style="min-height:140px;font-family:ui-monospace,Menlo,monospace;
+font-size:12.5px" placeholder="Enrolment, payment and post-back documentation…">{e(docs.get('tpa',''))}</textarea></div></div>
+<p class="hint">Nothing here is sent anywhere. It is a notepad so the specs and the wiring live in
+the same place.</p></div>
+
 <div class="panel" style="margin-top:18px"><h3>Ping-post</h3>
 <p class="mut small">A <b>ping</b> fires when a quote is texted; a <b>post</b> fires when the
 customer enrols. Leave a URL blank and that step is simulated and logged instead.</p>
@@ -2035,6 +2214,16 @@ async def admin_int_save(request: Request, u=Depends(require_admin)):
     set_setting("tpa", {"enroll_url": g("tpa_enroll"), "billing_url": g("tpa_billing"),
                         "secret": g("tpa_secret") or secrets.token_urlsafe(24),
                         "headers": g("tpa_headers")})
+    set_setting("rating_api", {"enabled": g("ra_enabled") == "1", "url": g("ra_url"),
+                               "method": g("ra_method") or "POST",
+                               "returns": g("ra_returns") or "monthly",
+                               "auth_header": g("ra_auth_header"),
+                               "auth_value": g("ra_auth_value"),
+                               "headers": g("ra_headers"), "request": g("ra_request"),
+                               "response_path": g("ra_response_path") or "monthly_premium"})
+    set_setting("api_docs", {"rating": g("docs_rating"), "pingpost": g("docs_pingpost"),
+                             "tpa": g("docs_tpa")})
+    _RATE_CACHE.clear()
     log("settings", "integrations updated")
     return RedirectResponse("/admin/integrations?ok=Saved.+The+flow+uses+these+immediately.",
                             status_code=303)
@@ -2057,6 +2246,16 @@ def admin_test(request: Request, what: str, u=Depends(require_admin)):
         ok = send_sms("5555550100", "Policy Store test message — ignore.", None)
     elif what == "tpa":
         ok = tpa_submit(d, "PS-TEST")
+    elif what == "rating":
+        if not rating_api_on():
+            return RedirectResponse("/admin/integrations?ok=Rating+API+is+switched+off+—+turn+"
+                                    "it+on+and+save+first", status_code=303)
+        _RATE_CACHE.clear()
+        val = rating_api_call("add", "NC", 42, 100000, None, "single")
+        ok = val is not None
+        log("rating_api", f"TEST add/NC/42/$100k → "
+                          f"{('$%.2f monthly' % val) if ok else 'no premium returned'}",
+            None, None, ok)
     else:
         raise HTTPException(404, "Unknown test")
     msg = {True: "succeeded", False: "failed — see the activity log",
@@ -2100,7 +2299,8 @@ def admin_rates(request: Request, u=Depends(require_admin), ok: str = ""):
 <p class="lead">Travel 365 pricing is real and comes straight from the carrier sheet. The three
 accident products are quoted from the table below.</p>
 {f'<div class="okmsg">{e(ok)}</div>' if ok else ''}
-{'<div class="warn"><b>Demo rates are loaded.</b> The workbook we were given contained benefit amounts, tiers and age bands but no premium rates for AD&amp;D, Accident Medical or Critical Illness. Everything below is placeholder pricing so the flow can be demonstrated. Every quote built from it is stamped <code>rates_are_demo: true</code> — on screen, in the quote record, and in the ping-post payload.</div>' if rates_are_demo() else '<div class="okmsg"><b>Carrier rates loaded.</b> Quotes are no longer flagged as demo.</div>'}
+{'<div class="okmsg"><b>The carrier rating API is live.</b> Quotes rate against it and this table is only a fallback for when the API cannot be reached. Configure it in <a href="/admin/integrations">Integrations</a>.</div>' if rating_api_on() else ''}
+{'' if rating_api_on() else '<div class="warn"><b>Demo rates are loaded.</b> The workbook we were given contained benefit amounts, tiers and age bands but no premium rates for AD&amp;D, Accident Medical or Critical Illness. Everything below is placeholder pricing so the flow can be demonstrated. Every quote built from it is stamped <code>rates_are_demo: true</code> — on screen, in the quote record, and in the ping-post payload.</div>' if rates_are_demo() else '<div class="okmsg"><b>Carrier rates loaded.</b> Quotes are no longer flagged as demo.</div>'}
 <div class="panel" style="margin-top:16px"><h3>How the table works</h3>
 <ul class="mut" style="margin:10px 0 0 20px;font-size:14.5px">
 <li style="margin-bottom:6px"><code>add</code>, <code>ame</code>, <code>ci</code> — monthly
