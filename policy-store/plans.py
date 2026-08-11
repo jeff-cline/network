@@ -187,7 +187,12 @@ T365_RATES = {
         "choice":     {"yearly": 378.91, "monthly": 31.58, "biweekly": 14.57}},
 }
 T365_MAX_AGE = 80          # "Plans are not available for travelers over 80 years old."
+# Travel 365 is sold as an annual policy. Monthly and bi-weekly figures exist to
+# make the price comparable, not because the customer can buy it that way.
+T365_SOLD_AS = "annual"
 T365_NOTES = [
+    "Travel 365 is purchased as an annual policy. Monthly and bi-weekly figures are shown for "
+    "comparison only — the plan is bought and billed for the full year.",
     "Coverage limits and rates are per person. All coverages are aggregate amounts for the "
     "annual term.",
     "Plans are not available for travelers over 80 years old.",

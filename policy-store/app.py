@@ -1365,7 +1365,7 @@ the real number.</div><a class="btn ghost" href="/quote?restart=1">Start over</a
         chosen = plan or "essentials"
         pick = next(o for o in opts if o["key"] == chosen)
         token, qid = save_quote(request, q, pick["monthly"], pick["yearly"], "t365", 0,
-                                t365_plan=chosen, term=term)
+                                t365_plan=chosen, term="annual")
         q["token"] = token
         q_set(request, q)
         cards = ""
@@ -1375,8 +1375,8 @@ the real number.</div><a class="btn ghost" href="/quote?restart=1">Start over</a
 <div style="height:5px;background:{o['colour']};border-radius:4px;margin-bottom:12px"></div>
 <h3>{e(o['name'])}</h3>
 <div style="font-size:30px;font-weight:850;color:var(--navy);letter-spacing:-1px;margin:6px 0 2px">
-{money(o['monthly'])}<span style="font-size:14px;font-weight:600;color:var(--soft)">/mo</span></div>
-<p class="small mut">{money(o['yearly'])} a year · {money(o['biweekly'])} bi-weekly</p>
+{money(o['yearly'])}<span style="font-size:14px;font-weight:600;color:var(--soft)">/year</span></div>
+<p class="small mut">Works out to {money(o['monthly'])} a month · bought and billed annually</p>
 <div class="foot">{'<span class="tag ok">Selected</span>' if on else
  f'<a class="btn ghost sm" href="/quote/result?plan={o["key"]}">Choose this</a>'}</div></div>"""
         return HTMLResponse(shell(f"""<section class="wrap pad"><div class="chat">
@@ -1388,9 +1388,11 @@ per person, for a full year of trips.</p></div></div></div>
 <div class="grid g3">{cards}</div>
 <div class="qbox" style="margin-top:22px">
 <div class="kicker" style="color:var(--sky)">Your selection</div>
-<div class="amt" style="margin-top:6px">{money(pick['monthly'])}<span class="per">/month</span></div>
-<p style="color:#9dc3ea;margin-top:6px">{e(pick['name'])} · {money(pick['yearly'])} annually ·
-state rate tier {pick['tier']}</p>
+<div class="amt" style="margin-top:6px">{money(pick['yearly'])}<span class="per">for the year</span></div>
+<p style="color:#9dc3ea;margin-top:6px">{e(pick['name'])} · about {money(pick['monthly'])} a month ·
+one annual payment · {e(P.STATE_NAMES.get(st, st))}</p>
+<div class="qline" style="margin-top:10px"><span>How it's sold</span>
+<b>Annual policy — paid once for the year</b></div>
 <div style="margin-top:18px">{text_me_form(q, token)}</div></div>
 <p class="small mut" style="margin-top:14px">{" ".join(P.T365_NOTES)}</p>
 </div></section>""", u, title="Your Travel 365 quote — Policy Store"))
@@ -1548,9 +1550,10 @@ def checkout(request: Request, token: str):
         raise HTTPException(404, "That link has expired")
     r = dict(r)
     log("checkout_view", f"quote {token}", r["id"])
-    if r["product"] == "t365":
+    annual_only = r["product"] == "t365"
+    if annual_only:
         pname = next((n for k, n, _ in P.T365_PLANS if k == r["t365_plan"]), "Travel 365")
-        detail = f"{pname} · annual term · per person"
+        detail = f"{pname} · annual policy · per person"
     else:
         names = " and ".join(P.PRODUCTS[p]["name"] for p in (r["product"] or "").split("+")
                              if p in P.PRODUCTS)
@@ -1571,8 +1574,10 @@ flex-wrap:wrap">
 <p class="mut small" style="margin-top:4px">{e(P.STATE_NAMES.get(r['state'], r['state']))} ·
 age {r['age']} · quote {e(token)}</p></div>
 <div style="text-align:right"><div style="font-size:34px;font-weight:850;color:var(--navy);
-letter-spacing:-1.2px;line-height:1">{money(r['monthly'])}</div>
-<div class="small mut">per month · {money(r['annual'])} a year</div></div></div>
+letter-spacing:-1.2px;line-height:1">{money(r['annual'] if annual_only else r['monthly'])}</div>
+<div class="small mut">{'for the year · about ' + money(r['monthly']) + ' a month'
+ if annual_only else 'per month · ' + money(r['annual']) + ' a year'}</div></div></div>
+{'<div class="warn" style="margin-top:14px"><b>This is an annual policy.</b> Travel 365 is bought and billed for the full year — the monthly figure is shown only so you can compare it. You will be charged ' + money(r['annual']) + ' once.</div>' if annual_only else ''}
 <hr style="border:0;border-top:1px solid var(--line);margin:18px 0">
 <h4 style="margin-bottom:8px">What happens when you press the button</h4>
 <ol class="mut" style="margin:0 0 0 20px;font-size:14.5px">
@@ -1653,7 +1658,8 @@ def enrol(request: Request, token: str = Form(...), first: str = Form(""), last:
 <div class="panel center" style="border-color:#b6e3cd;background:#f4fbf7">
 <div style="font-size:46px">✅</div>
 <h1 style="margin:8px 0 6px">You're covered.</h1>
-<p class="lead">Policy <b>{policy_no}</b> · {money(r['monthly'])} a month</p>
+<p class="lead">Policy <b>{policy_no}</b> · {money(r['annual']) + ' for the year'
+ if r['product'] == 't365' else money(r['monthly']) + ' a month'}</p>
 <p class="mut">Documents are on their way to {e(r['email'])}. Your 30-day free look runs to
 <b>{free_look_ends}</b>.</p></div>
 
