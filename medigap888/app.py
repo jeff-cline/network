@@ -1046,12 +1046,17 @@ dialled the QR number — the only certain attribution.
 minutes. <b>Time only</b> called the main line and merely landed in the window; with spots a
 median twenty minutes apart that is close to chance. <b>Callers</b> counts people, not dials —
 one person redialling three times is one response.</p>
+<p class="small mut" style="margin:8px 0 0;max-width:96ch"><b>A note on the window.</b> Five
+minutes is the direct-response convention, and it fits a spot that says "call now". A QR code
+does not work that way — the viewer scans, reads, thinks, then dials, so the honest response
+curve for the 888 number is longer. Try 30 to 60 minutes when you are judging the QR number,
+and keep it tight when you are judging the 800 line.</p>
 </div>
 <form method="get" style="display:flex;gap:8px;align-items:flex-end">
 <input type="hidden" name="batch" value="{e(batch)}">
 <div><label>Response window</label>
 <select name="window" onchange="this.form.submit()">
-{"".join(f'<option value="{w}" {"selected" if w == window else ""}>{w} min</option>' for w in (2,3,5,10,15,30))}
+{"".join(f'<option value="{w}" {"selected" if w == window else ""}>{w} min</option>' for w in (2,3,5,10,15,30,45,60))}
 </select></div></form></div>
 {qr_note}
 {caveat}
@@ -1089,7 +1094,7 @@ NETWORK_CODE, REGION_CODE and AD_UNIT_TITLE, and tolerates other column names.</
 {"".join(f'<option value="{z}" {"selected" if z == tz_name() else ""}>{e(n)}</option>' for z, n in TZ_CHOICES)}
 </select></div>
 <div><label>Response window</label><select name="window">
-{"".join(f'<option value="{w}" {"selected" if w == window else ""}>{w} min</option>' for w in (2,3,5,10,15,30))}
+{"".join(f'<option value="{w}" {"selected" if w == window else ""}>{w} min</option>' for w in (2,3,5,10,15,30,45,60))}
 </select></div>
 <div style="display:flex;align-items:flex-end"><button class="btn" type="submit">Upload</button></div>
 </div></form>
